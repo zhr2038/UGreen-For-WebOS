@@ -1,0 +1,23 @@
+{
+  "name": "lg-nas-cinema",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "package:tv": "ares-package app -o dist --no-minify",
+    "seed": "node tools/import-session.mjs",
+    "setup:nas": "node tools/configure-nas.mjs",
+    "pair:code": "node tools/pair-code.mjs"
+  },
+  "devDependencies": {
+    "@webos-tools/cli": "3.2.6"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
+  }
+}

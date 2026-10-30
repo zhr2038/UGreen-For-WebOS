@@ -1,0 +1,49 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+
+  package-tv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run package:tv
+        env:
+          ARES_PROFILE: tv
+      - uses: actions/upload-artifact@v7
+        with:
+          name: webos-ipk
+          path: dist/*.ipk
+
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t lg-nas-cinema:ci .
+      - run: docker run --rm lg-nas-cinema:ci node tools/configure-nas.mjs --help
+      - run: docker run --rm -e STATE_DIR=/tmp/state lg-nas-cinema:ci node tools/pair-code.mjs

@@ -1,0 +1,12 @@
+.local
+node_modules
+dist
+output
+.playwright-cli
+design
+test
+tools/*
+!tools/configure-nas.mjs
+!tools/pair-code.mjs
+state
+.git

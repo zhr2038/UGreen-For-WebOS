@@ -1,0 +1,14 @@
+{
+  "id": "top.hrhome.nascinema",
+  "version": "0.2.0",
+  "vendor": "Personal use",
+  "type": "web",
+  "main": "index.html",
+  "title": "云影视",
+  "icon": "icon.png",
+  "largeIcon": "large-icon.png",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true,
+  "requiredACG": [],
+  "appDescription": "个人使用的绿联 NAS 影视中心与相册客户端"
+}
