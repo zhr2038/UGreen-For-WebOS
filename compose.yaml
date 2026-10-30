@@ -1,6 +1,6 @@
 services:
   lg-nas-cinema:
-    image: lg-nas-cinema:0.2.0
+    image: lg-nas-cinema:0.2.1
     build: .
     container_name: lg-nas-cinema
     working_dir: /app

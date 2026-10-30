@@ -40,6 +40,18 @@ jobs:
           name: webos-ipk
           path: dist/*.ipk
 
+  test-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright-cli install-browser chrome
+      - run: npm run test:ui
+
   build-server:
     runs-on: ubuntu-latest
     steps:

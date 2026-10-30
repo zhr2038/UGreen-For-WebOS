@@ -2,7 +2,7 @@
 
 在 LG 电视上浏览和播放绿联 NAS「影视中心」里的电影、电视剧，沿用已有海报、影片资料、收藏和观看进度，并浏览 NAS 现有相册。
 
-**当前发布版 v0.2.0：影视＋相册。** 相册功能需要电视 App 与 NAS 兼容服务均为 0.2.0；已有 0.2.0 NAS 服务时，第二台电视只需安装 App 并配对。
+**当前发布版 v0.2.1：影视＋相册，修复遥控器导航与播放生命周期问题。** 相册功能需要电视 App 与 NAS 兼容服务均至少为 0.2.0；已有 0.2.0 NAS 服务时，第二台电视只需安装 App 并配对。
 
 ### 相册功能（0.2.0）
 
@@ -11,7 +11,7 @@
 - 照片可旋转、放大，并以 5 / 10 / 15 秒间隔播放幻灯片；图片加载后才开始计时，视频结束后继续。加载失败停止，切换到后台暂停。
 - 读取 NAS 现有相册索引，不上传、删除或重建照片库。「喜欢」仅浏览已有收藏；实况照片显示静态画面。
 - NAS 预览图转换为最多 1920×1080 的 WebP，最多两张图片并行处理，缓存上限 24 MiB。视频原画直放，编码兼容性取决于电视；尚未提供原图 4K、AI 人物 / 地点分类、相册编辑或背景音乐。
-- 本地安装包：`dist/top.hrhome.nascinema_0.2.0_all.ipk`；服务端包：`dist/lg-nas-cinema-server-v0.2.0.zip`。
+- 本地安装包：`dist/top.hrhome.nascinema_0.2.1_all.ipk`；服务端包：`dist/lg-nas-cinema-server-v0.2.1.zip`。
 
 **[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest) · [第二台电视安装教程](#second-tv) · [首次部署 NAS](#nas-setup) · [常见问题](#faq)**
 
@@ -38,7 +38,7 @@
 在电脑打开 [Releases](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest)，下载：
 
 ```text
-top.hrhome.nascinema_0.2.0_all.ipk
+top.hrhome.nascinema_0.2.1_all.ipk
 ```
 
 直接下载 .ipk 即可，不需要编译，也不需要下载源码。
@@ -52,7 +52,7 @@ http://NAS_IP:8780/health
 看到类似下面的内容，表示服务可以连接：
 
 ```json
-{"ok":true,"name":"LG NAS Cinema","version":"0.2.0"}
+{"ok":true,"name":"LG NAS Cinema","version":"0.2.1"}
 ```
 
 旧版 0.1.0 / 0.1.1 服务可继续提供影视功能；相册需要升级到 0.2.0 服务。访问失败时先看[连接问题](#faq)；尚未部署服务则先完成 [B 部分](#nas-setup)。
@@ -169,7 +169,7 @@ App 会在这台电视记住连接信息。每台电视单独配对，使用同�
 从 [Releases](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest)下载：
 
 ```text
-lg-nas-cinema-server-v0.2.0.zip
+lg-nas-cinema-server-v0.2.1.zip
 ```
 
 在电脑解压，把里面的 **lg-nas-cinema** 文件夹上传到 NAS 的 Docker 项目目录。下面以 /volume1/docker/lg-nas-cinema 为例；目录不同就替换它，配置较适合放在 SSD 存储池。
@@ -221,14 +221,21 @@ sudo docker compose restart lg-nas-cinema
 
 升级时保留原 **state** 目录，替换程序文件后运行 sudo docker compose up -d --build。state/clients.json 保存已有电视配对，state/nas.json 保存 NAS 登录会话。
 
+## v0.2.1 修复内容
+
+修复播放控制栏左右键无法导航、弹出菜单被透明层遮挡、专用播放/暂停键反转、加载中暂停误报故障、退出时等待网络、迟到播放和搜索请求覆盖页面、列表返回丢失页码/焦点、配对失败污染当前 NAS 地址、相册失效链接重试、视频幻灯片暂停等问题。[详细记录](docs/BUGFIX-0.2.1.md)。
+
 ## 遥控器操作
 
 | 按键 | 行为 |
 | --- | --- |
 | 上下左右 | 移动焦点 |
 | 确定 | 进入、播放、执行选中操作 |
-| 播放时左 / 右 | 快退 / 快进 10 秒 |
-| 播放时下键 | 显示控制栏 |
+| 控制栏按钮区左 / 右 | 在播放、列表、设置、信息等按钮间移动 |
+| 进度条上左 / 右，或控制栏隐藏时左 / 右 | 快退 / 快进 10 秒 |
+| 按钮区上键 / 进度条下键 | 在进度条与按钮区切换 |
+| 播放时下键 | 显示控制栏并选择按钮 |
+| 排序 / 筛选选择框 | 按确定打开选项，上下选择，确定应用，返回取消 |
 | 返回 | 关闭菜单、返回影片、返回首页 |
 | 首页连续两次返回 | 退出 App |
 
@@ -261,7 +268,7 @@ HDMI 显示的是电脑桌面。Home、应用商店、Developer Mode 属于电�
 
 **新 App 能连接旧 NAS 服务吗？**
 
-0.2.0 电视 App 可连接 0.1.0 / 0.1.1 NAS 服务观看电影，但相册要求 0.2.0 NAS 服务。升级时按 B 部分保留 state 目录并重新构建。新配对码工具从 0.1.1 服务端开始提供；0.1.0 服务仍需在码过期后通过重启生成新码。
+0.2.x 电视 App 可连接 0.1.0 / 0.1.1 NAS 服务观看电影，但相册要求 0.2.0 NAS 服务。升级时按 B 部分保留 state 目录并重新构建。新配对码工具从 0.1.1 服务端开始提供；0.1.0 服务仍需在码过期后通过重启生成新码。
 
 **有海报，但视频黑屏、无声音或打不开？**
 
@@ -282,8 +289,11 @@ HDMI 显示的是电脑桌面。Home、应用商店、Developer Mode 属于电�
 ```sh
 npm ci
 npm test
+npm run test:ui
 npm run package:tv
 ```
+
+界面回归检查使用 Playwright CLI，需要已安装 Google Chrome；测试使用模拟 NAS 和媒体事件，不能代替电视解码验收。
 
 打包结果位于 dist。使用 python tools/package-server.py 生成服务端 ZIP。GitHub Actions 在 Windows/Linux 测试，并构建电视安装包和 Docker 镜像。
 

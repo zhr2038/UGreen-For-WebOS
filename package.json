@@ -1,6 +1,6 @@
 {
   "name": "lg-nas-cinema",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,12 +9,14 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:ui": "node tools/check-ui.mjs",
     "package:tv": "ares-package app -o dist --no-minify",
     "seed": "node tools/import-session.mjs",
     "setup:nas": "node tools/configure-nas.mjs",
     "pair:code": "node tools/pair-code.mjs"
   },
   "devDependencies": {
+    "@playwright/cli": "0.1.22",
     "@webos-tools/cli": "3.2.6"
   },
   "dependencies": {

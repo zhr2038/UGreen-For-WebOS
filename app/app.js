@@ -6,8 +6,9 @@
     get(k, fallback = '') { try { return localStorage.getItem('cinema.' + k) || fallback; } catch { return fallback; } },
     set(k, v) { try { localStorage.setItem('cinema.' + k, v); } catch {} },
   };
-  const S = { server: store.get('server', location.protocol.startsWith('http') ? location.origin : ''), token: store.get('token'), route: 'home', home: null, hero: 0, list: [], page: 1, last: true, detail: null, playback: null, returnRoute: 'home', dialog: null, controls: true, busy: false, epoch: 0, lastReport: 0, exitConfirm: false };
+  const S = { server: store.get('server', location.protocol.startsWith('http') ? location.origin : ''), token: store.get('token'), route: 'home', home: null, hero: 0, list: [], page: 1, last: true, detail: null, playback: null, returnRoute: 'home', returnView: null, dialog: null, controls: true, busy: false, epoch: 0, exitConfirm: false, playGeneration: 0, playStarting: false, pendingResume: new Map() };
   let toastTimer, controlsTimer, heroTimer;
+  let progressTail = Promise.resolve();
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const icons = {
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
@@ -37,14 +38,60 @@
   function toast(text) { clearTimeout(toastTimer); $('#toast').textContent = text; $('#toast').classList.add('visible'); toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 4200); }
   function focus(el) { if (!el) return; try { el.focus({ preventScroll: true }); } catch { el.focus(); } el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' }); }
   function firstFocus() { focus(root.querySelector('[data-primary]') || root.querySelector('button,input,select')); }
-  async function api(path, data, signal) {
+  async function api(path, data, signal, connection = { server: S.server, token: S.token }) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 35000);
     const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
     try {
-      const res = await fetch(S.server + path, { method: data ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + S.token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined, signal: controller.signal });
+      const res = await fetch(connection.server + path, { method: data ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + connection.token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined, signal: controller.signal });
       const result = await res.json(); if (!res.ok) throw new Error(result.error || '连接失败'); return result;
     } catch (error) { if (error.name === 'AbortError') throw new Error('连接超时，请检查电视和 NAS 的网络'); throw error; }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  }
+  function cancelPlayRequest() {
+    S.playAbort?.abort(); S.playAbort = null; S.playStarting = false; S.playGeneration++;
+  }
+  function beginView(name) {
+    closeSelect(false);
+    cancelPlayRequest();
+    S.searchAbort?.abort(); S.searchAbort = null;
+    S.libraryAbort?.abort(); S.libraryAbort = null; S.libraryLoad = null; S.busy = false;
+    S.route = name; return ++S.epoch;
+  }
+  function closeSelect(restore = true) {
+    const popup = S.selectPopup; S.selectPopup = null;
+    popup?.element.remove(); if (restore && popup?.select.isConnected) focus(popup.select);
+  }
+  function openSelect(select) {
+    if (S.selectPopup || !select?.isConnected || select.disabled) return;
+    const options = Array.from(select.options);
+    const element = document.createElement('section'); element.className = 'select-overlay'; element.setAttribute('role', 'dialog'); element.setAttribute('aria-modal', 'true'); element.setAttribute('aria-label', select.getAttribute('aria-label') || '选择选项');
+    element.innerHTML = `<div class="select-panel"><h2>${esc(select.getAttribute('aria-label') || '选择选项')}</h2>${options.map((option, index) => `<button data-option="${index}" ${option.disabled ? 'disabled' : ''} aria-pressed="${option.selected}">${esc(option.text)}${option.selected ? ' ✓' : ''}</button>`).join('')}<button data-select-close>返回</button></div>`;
+    root.appendChild(element); S.selectPopup = { element, select };
+    element.querySelectorAll('[data-option]').forEach(button => button.onclick = () => {
+      const option = options[Number(button.dataset.option)], changed = select.value !== option.value;
+      closeSelect(false);
+      if (select.isConnected) { if (changed) { select.value = option.value; select.dispatchEvent(new Event('change', { bubbles: true })); } else focus(select); }
+    });
+    element.querySelector('[data-select-close]').onclick = () => closeSelect();
+    focus(element.querySelector(`[data-option="${select.selectedIndex}"]`) || element.querySelector('button:not([disabled])'));
+  }
+  function captureView() {
+    const nodes = Array.from(root.querySelectorAll('button,input,select,[tabindex="0"]'));
+    return { route: S.route, libraryId: S.libraryId, libraryTitle: S.libraryTitle, list: S.list, page: S.page, last: S.last, total: S.total, sort: S.sort, searchView: S.searchView, scrollTop: root.querySelector('.screen')?.scrollTop || 0, focusIndex: nodes.indexOf(document.activeElement), focusKey: document.activeElement?.dataset.focus };
+  }
+  function restoreView() {
+    const view = S.returnView;
+    if (!view) return home();
+    beginView(view.route); photoGallery.leave();
+    Object.assign(S, { libraryId: view.libraryId, libraryTitle: view.libraryTitle, list: view.list, page: view.page, last: view.last, total: view.total, sort: view.sort, searchView: view.searchView, busy: false });
+    if (view.route === 'home') renderHome();
+    else if (view.route === 'search') renderSearch();
+    else if (view.route === 'folders') renderFolders();
+    else renderLibrary();
+    const nodes = Array.from(root.querySelectorAll('button,input,select,[tabindex="0"]'));
+    const original = nodes[view.focusIndex];
+    focus(original && (!view.focusKey || original.dataset.focus === view.focusKey) ? original : (view.focusKey ? root.querySelector(`[data-focus="${CSS.escape(view.focusKey)}"]`) : null) || root.querySelector('button'));
+    const screen = root.querySelector('.screen'); if (screen) screen.scrollTop = view.scrollTop;
   }
   function image(path, className = '', alt = '') { return path ? `<img class="${className}" src="${esc(asset(path))}" alt="${esc(alt)}" loading="lazy">` : ''; }
   function header(title) { return `<header class="header"><img class="logo" src="logo.png" alt="UGREEN"><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · 局域网</span></header>`; }
@@ -66,12 +113,12 @@
   }
   async function home() {
     photoGallery.leave();
-    S.route = 'home'; S.dialog = null; const epoch = ++S.epoch; clearInterval(heroTimer); loading();
+    const epoch = beginView('home'); S.dialog = null; clearInterval(heroTimer); loading();
     try { const data = await api('/api/home'); if (epoch !== S.epoch) return; S.home = data; S.hero = 0; renderHome(); }
     catch (err) { if (epoch === S.epoch) errorScreen(err); }
   }
   function loading() { root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
-  function errorScreen(error) { root.innerHTML = `<div class="error-screen"><h1>暂时无法连接</h1><p>${esc(error.message)}</p><div class="actions"><button class="action" data-primary id="retry">重试</button><button class="action secondary" data-route="settings">连接设置</button></div></div>`; $('#retry').onclick = home; bind(); firstFocus(); }
+  function errorScreen(error, retry = home) { root.innerHTML = `<div class="error-screen"><h1>暂时无法连接</h1><p>${esc(error.message)}</p><div class="actions"><button class="action" data-primary id="retry">重试</button><button class="action secondary" data-route="settings">连接设置</button></div></div>`; $('#retry').onclick = retry; bind(); firstFocus(); }
   function renderLibrary() {
     const title = S.libraryTitle || labels[S.route] || '全部影片';
     root.innerHTML = `${header(title)}${nav(S.route)}<main class="screen library-screen"><div class="toolbar"><button data-route="movies" class="${S.route === 'movies' ? 'selected' : ''}">电影</button><button data-route="tv" class="${S.route === 'tv' ? 'selected' : ''}">电视剧</button><span>${S.total || 0} 部</span><select id="sort" aria-label="排序"><option value="2">按添加时间 ↓</option><option value="1">按名称</option><option value="4">按评分</option></select></div><div class="grid ${S.route === 'history' ? 'history-grid' : ''}">${S.list.map(i => card(i, S.route === 'history')).join('')}</div>${!S.list.length ? '<div class="empty">暂无影片</div>' : ''}${S.last ? '' : '<div class="more-row"><button class="action secondary" id="load-more">加载更多</button></div>'}</main>`;
@@ -80,75 +127,117 @@
     bind();
   }
   async function loadLibrary(reset) {
-    if (S.busy) return; S.busy = true;
+    if (S.busy && !reset) return;
+    if (reset) S.libraryAbort?.abort();
+    S.busy = true;
+    const owner = {}, controller = new AbortController(); S.libraryLoad = owner; S.libraryAbort = controller;
     const epoch = ++S.epoch, oldCount = reset ? 0 : S.list.length;
     if (reset) { S.list = []; S.page = 1; loading(); }
     try {
       const query = new URLSearchParams({ kind: S.route, page: S.page, sort: S.sort || '2' });
       if (S.libraryId) query.set('id', S.libraryId);
-      const data = await api('/api/library?' + query); if (epoch !== S.epoch) return;
+      const data = await api('/api/library?' + query, undefined, controller.signal); if (epoch !== S.epoch) return;
       S.list = reset ? data.items : S.list.concat(data.items); S.last = data.last || data.items.length === 0; S.total = data.total; S.page++;
       renderLibrary(); focus(root.querySelectorAll('.grid .movie')[oldCount] || root.querySelector('#load-more') || root.querySelector('button'));
-    } catch (err) { if (epoch === S.epoch) errorScreen(err); }
-    finally { S.busy = false; }
+    } catch (err) { if (epoch === S.epoch) { if (reset) errorScreen(err, () => loadLibrary(true)); else { renderLibrary(); focus($('#load-more')); toast(err.message); } } }
+    finally { if (S.libraryLoad === owner) { S.busy = false; S.libraryAbort = null; } }
   }
   async function openDetail(id, type, library, preserveRoute = false) {
-    if (!preserveRoute) S.returnRoute = S.route;
-    S.route = 'detail'; const epoch = ++S.epoch; loading();
-    try { const data = await api(`/api/detail?id=${id}&type=${type}&library=${library}`); if (epoch !== S.epoch) return; S.detail = data; renderDetail(); }
-    catch (err) { if (epoch === S.epoch) errorScreen(err); }
+    if (!preserveRoute) { S.returnRoute = S.route; S.returnView = captureView(); }
+    const epoch = beginView('detail'); loading();
+    try { const data = await api(`/api/detail?id=${id}&type=${type}&library=${library}`); if (epoch !== S.epoch) return; const pending = S.pendingResume.get(String(id)); if (pending) { data.item.position = pending.position; data.resumeFileIndex = pending.fileIndex; } S.detail = data; renderDetail(); }
+    catch (err) { if (epoch === S.epoch) errorScreen(err, () => openDetail(id, type, library, true)); }
   }
   function renderDetail() {
     const { item: i, files, actors, technical } = S.detail;
     root.innerHTML = `<main class="screen detail-screen">${image(i.backdrop, 'backdrop')}<div class="shade"></div><button class="back" id="back">${icon('back')}返回</button><div class="detail-copy"><h2>${esc(i.name)}</h2><p class="meta">${meta(i)}</p><p class="overview">${esc(i.overview)}</p><p class="meta">${[i.clarity, technical?.video_info?.codec?.toUpperCase(), i.imageQuality, i.audioQuality].filter(Boolean).map(esc).join(' · ')}</p><div class="actions"><button class="action" data-primary id="play">${i.position > 0 ? '继续播放 ' + time(i.position) : '立即播放'}</button><button class="action secondary" id="restart">从头播放</button><button class="action secondary" id="favorite">${i.favorite ? '已收藏' : '收藏'}</button></div></div>${files.length > 1 ? `<section class="details-section"><h3>${i.type === 2 ? '选集' : '播放版本'}</h3><div class="episodes">${files.map(f => `<button class="episode" data-file="${f.index}">${esc(f.episode ? '第 ' + f.episode + ' 集' : f.name)}</button>`).join('')}</div></section>` : ''}${actors.some(a => a.name) ? `<section class="details-section"><h3>演职人员</h3><div class="actor-list">${actors.filter(a => a.name).map(a => `<div>${esc(a.name)}<small>${esc(a.role || '')}</small></div>`).join('')}</div></section>` : ''}${technical ? `<section class="details-section"><h3>影片信息</h3><div class="technical">${esc(technical.container?.toUpperCase() || '')} · ${esc(technical.video_info?.resolution || '')} · ${esc(technical.video_info?.framerate || '')}<br>${(technical.audio_info || []).map(a => `${esc(a.language)} · ${esc(a.codec)} · ${esc(a.channels)} 声道`).join('<br>')}</div></section>` : ''}</main>`;
     $('#back').onclick = back; $('#play').onclick = () => play(); $('#restart').onclick = () => play(true);
-    $('#favorite').onclick = async () => {
-      try { await api('/api/favorite', { id: i.id, type: i.type, library: i.libraryId, favorite: !i.favorite }); i.favorite = !i.favorite; $('#favorite').textContent = i.favorite ? '已收藏' : '收藏'; toast(i.favorite ? '已收藏' : '已取消收藏'); }
+    const favoriteButton = $('#favorite'); favoriteButton.onclick = async () => {
+      if (favoriteButton.disabled) return; favoriteButton.disabled = true;
+      try { await api('/api/favorite', { id: i.id, type: i.type, library: i.libraryId, favorite: !i.favorite }); i.favorite = !i.favorite; favoriteButton.textContent = i.favorite ? '已收藏' : '收藏'; if (S.returnView?.route === 'favorites' && !i.favorite) { S.returnView.list = S.returnView.list.filter(v => v.id !== i.id); S.returnView.total = Math.max(0, S.returnView.total - 1); } toast(i.favorite ? '已收藏' : '已取消收藏'); }
       catch (err) { toast(err.message); }
+      finally { favoriteButton.disabled = false; }
     };
     root.querySelectorAll('[data-file]').forEach(b => b.onclick = () => play(false, Number(b.dataset.file))); firstFocus();
   }
   async function play(restart = false, fileIndex) {
-    const i = S.detail.item; toast('正在打开影片…');
+    if (S.playStarting || !S.detail || !['detail', 'player'].includes(S.route)) return;
+    const detail = S.detail, i = detail.item, epoch = S.epoch, generation = ++S.playGeneration;
+    const controller = new AbortController(); S.playAbort = controller; S.playStarting = true;
+    const selected = Number.isInteger(fileIndex) ? fileIndex : detail.resumeFileIndex;
+    if (S.route === 'player') { video.pause(); reportProgress(true); }
+    toast('正在打开影片…');
     try {
-      const data = await api('/api/play', { id: i.id, type: i.type, library: i.libraryId, restart, fileIndex });
-      S.playback = data; S.route = 'player'; S.dialog = null; S.controls = true; S.lastReport = 0;
+      const data = await api('/api/play', { id: i.id, type: i.type, library: i.libraryId, restart, fileIndex: selected }, controller.signal);
+      if (generation !== S.playGeneration || epoch !== S.epoch || detail !== S.detail) return;
+      const pending = S.pendingResume.get(String(i.id));
+      if (!restart && pending && (selected === undefined || pending.fileIndex === undefined || selected === pending.fileIndex)) data.position = pending.position;
+      S.playback = { ...data, itemId: i.id, fileIndex: data.fileIndex ?? selected, connection: { server: S.server, token: S.token } }; S.route = 'player'; S.dialog = null; S.controls = true;
       document.body.classList.add('playing'); video.src = asset(data.stream); video.load(); renderPlayer();
-      await video.play(); showControls();
-    } catch (err) { toast(err.message); if (S.route === 'player') playerError(err.message); }
+      await video.play(); if (generation === S.playGeneration && S.route === 'player') showControls();
+    } catch (err) { if (generation === S.playGeneration && epoch === S.epoch && err.name !== 'AbortError') { toast(err.message); if (S.route === 'player') playerError(err.message); } }
+    finally { if (generation === S.playGeneration) { S.playStarting = false; S.playAbort = null; } }
   }
   function renderPlayer() {
-    root.innerHTML = `<div class="player-ui ${S.controls ? '' : 'hidden'}"><div class="player-top"><button class="back" style="position:static" id="stop-player" aria-label="返回">${icon('back')}</button><span>${esc(S.playback.title)}</span></div><div class="player-bottom"><div class="player-time"><b id="elapsed">${time(video.currentTime)}</b><span>/ <b id="duration">${time(video.duration || S.playback.duration)}</b></span></div><div class="seek"><i id="seek-progress"></i></div><div class="player-buttons"><button id="pause" data-primary>${video.paused ? '播放' : '暂停'}</button><button id="episode-list">列表</button><button id="player-settings">设置</button><button id="player-info">信息</button><span class="info">原画 · ${esc(S.detail.item.clarity)} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}</span></div></div></div><div id="player-dialog"></div><div id="player-message"></div>`;
+    root.innerHTML = `<div class="player-ui ${S.controls ? '' : 'hidden'}"><div class="player-top"><button class="back" style="position:static" id="stop-player" aria-label="返回">${icon('back')}</button><span>${esc(S.playback.title)}</span></div><div class="player-bottom"><div class="player-time"><b id="elapsed">${time(video.currentTime)}</b><span>/ <b id="duration">${time(video.duration || S.playback.duration)}</b></span></div><div class="seek" id="player-seek" tabindex="0" role="slider" aria-label="播放进度" aria-valuemin="0" aria-valuemax="${S.playback.duration || 0}" aria-valuenow="0"><i id="seek-progress"></i></div><div class="player-buttons"><button id="pause" data-primary>${video.paused ? '播放' : '暂停'}</button><button id="episode-list">列表</button><button id="player-settings">设置</button><button id="player-info">信息</button><span class="info">原画 · ${esc(S.detail.item.clarity)} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}</span></div><p class="player-hint">左右选择按钮 · 上键调整进度 · 下键返回按钮</p></div></div><div id="player-dialog"></div><div id="player-message"></div>`;
     $('#stop-player').onclick = stop; $('#pause').onclick = togglePause; $('#episode-list').onclick = () => playerDialog('episodes'); $('#player-settings').onclick = () => playerDialog('settings'); $('#player-info').onclick = () => playerDialog('info'); firstFocus(); updateProgress();
   }
   function showControls() {
+    if (S.route !== 'player') return;
     S.controls = true; $('.player-ui')?.classList.remove('hidden');
     clearTimeout(controlsTimer); controlsTimer = setTimeout(() => { if (S.route === 'player' && !S.dialog && !video.paused) { S.controls = false; $('.player-ui')?.classList.add('hidden'); } }, 5000);
   }
-  function togglePause() { if (video.paused) video.play().catch(err => playerError(err.message)); else video.pause(); if ($('#pause')) $('#pause').textContent = video.paused ? '播放' : '暂停'; showControls(); }
-  function playerError(message) { if ($('#player-message')) $('#player-message').innerHTML = `<div class="player-message">${esc(message)}<br>可返回后选择其他片源或播放版本。<br><button class="action secondary" id="error-back">返回影片</button></div>`; S.dialog = 'error'; if ($('#error-back')) { $('#error-back').onclick = stop; focus($('#error-back')); } showControls(); }
+  function setPaused(paused) {
+    const playback = S.playback;
+    if (!playback || S.route !== 'player') return;
+    if (paused) video.pause();
+    else video.play().catch(err => { if (S.playback === playback && S.route === 'player' && err.name !== 'AbortError') playerError(err.message); });
+    if ($('#pause')) $('#pause').textContent = video.paused ? '播放' : '暂停'; showControls();
+  }
+  function togglePause() { setPaused(!video.paused); }
+  function seek(delta) {
+    if (!S.playback || video.readyState < 1 || !Number.isFinite(video.duration) || video.duration <= 0) { toast('影片尚未准备好'); return; }
+    try { video.currentTime = Math.max(0, Math.min(Math.max(0, video.duration - .1), (Number.isFinite(video.currentTime) ? video.currentTime : 0) + delta)); updateProgress(); }
+    catch { toast('此片源暂时无法跳转'); }
+    showControls(); focus($('#player-seek'));
+  }
+  function playerError(message) { if ($('#player-dialog')) $('#player-dialog').innerHTML = ''; if ($('#player-message')) $('#player-message').innerHTML = `<div class="player-message">${esc(message)}<br>可返回后选择其他片源或播放版本。<br><button class="action secondary" id="error-back">返回影片</button></div>`; S.dialog = 'error'; if ($('#error-back')) { $('#error-back').onclick = stop; focus($('#error-back')); } showControls(); }
   function updateProgress() {
     if (S.route !== 'player') return;
     const duration = Number.isFinite(video.duration) ? video.duration : S.playback.duration;
     if ($('#elapsed')) $('#elapsed').textContent = time(video.currentTime);
     if ($('#duration')) $('#duration').textContent = time(duration);
     if ($('#seek-progress')) $('#seek-progress').style.width = Math.min(100, duration ? video.currentTime / duration * 100 : 0) + '%';
+    if ($('#player-seek')) { $('#player-seek').setAttribute('aria-valuemax', Number.isFinite(duration) ? duration : 0); $('#player-seek').setAttribute('aria-valuenow', Math.floor(video.currentTime || 0)); $('#player-seek').setAttribute('aria-valuetext', time(video.currentTime) + ' / ' + time(duration)); }
   }
-  async function reportProgress(force = false) {
+  function reportProgress(force = false) {
     const p = S.playback;
-    if (!p || !Number.isFinite(video.duration) || video.duration <= 0 || (!force && Date.now() - S.lastReport < 15000)) return;
-    S.lastReport = Date.now();
-    try { await api('/api/progress', { id: p.id, position: video.currentTime, duration: video.duration }); }
-    catch (err) { if (force) toast('播放记录未能同步：' + err.message); }
+    if (!p || video.readyState < 1 || !Number.isFinite(video.duration) || video.duration <= 0 || (!force && Date.now() - (p.lastReportAt || 0) < 15000)) return Promise.resolve();
+    const snapshot = { id: p.id, position: Math.max(0, Math.min(video.duration, video.currentTime)), duration: video.duration, fileIndex: p.fileIndex };
+    const key = `${snapshot.position}:${snapshot.duration}`;
+    if (key === p.lastReportKey && !p.reportFailed) return p.reportPromise || Promise.resolve();
+    p.lastReportAt = Date.now(); p.lastReportKey = key; p.reportFailed = false;
+    const itemId = String(p.itemId); S.pendingResume.set(itemId, snapshot);
+    const job = progressTail.then(async () => {
+      if (S.pendingResume.get(itemId) !== snapshot) return;
+      await api('/api/progress', { id: snapshot.id, position: snapshot.position, duration: snapshot.duration }, undefined, p.connection);
+      if (p.lastReportKey === key) p.reportFailed = false;
+      if (S.pendingResume.get(itemId) === snapshot) S.pendingResume.delete(itemId);
+    }).catch(err => { p.reportFailed = true; if (force) toast('播放记录未能同步：' + err.message); });
+    p.reportPromise = job; progressTail = job; return job;
   }
-  async function stop() {
+  function stop() {
     if (S.route !== 'player') return;
-    clearTimeout(controlsTimer); video.pause(); await reportProgress(true);
-    video.removeAttribute('src'); video.load(); document.body.classList.remove('playing'); S.playback = null; S.dialog = null;
-    const i = S.detail.item; await openDetail(i.id, i.type, i.libraryId, true);
+    const playback = S.playback;
+    clearTimeout(controlsTimer); video.pause(); reportProgress(true);
+    if (video.readyState >= 1 && Number.isFinite(video.duration)) { S.detail.item.position = Math.max(0, Math.min(video.duration, video.currentTime)); S.detail.resumeFileIndex = playback?.fileIndex; }
+    beginView('detail'); S.playback = null; S.dialog = null;
+    video.removeAttribute('src'); video.load(); document.body.classList.remove('playing'); renderDetail();
   }
-  function closeDialog() { S.dialog = null; if ($('#player-dialog')) $('#player-dialog').innerHTML = ''; showControls(); focus($('#pause')); }
+  function closeDialog() { if (S.playStarting) cancelPlayRequest(); S.dialog = null; if ($('#player-dialog')) $('#player-dialog').innerHTML = ''; showControls(); focus(document.getElementById(S.dialogReturnFocus) || $('#pause')); }
+  function dialogBack() { if (['audio', 'subtitle', 'speed', 'ratio'].includes(S.dialog)) playerDialog('settings'); else closeDialog(); }
   function playerDialog(kind) {
+    if (!S.dialog) S.dialogReturnFocus = document.activeElement?.id;
     S.dialog = kind; showControls();
     let content = '';
     if (kind === 'episodes') content = `<h2>播放列表</h2>${S.detail.files.map(f => `<button data-switch="${f.index}">${esc(f.episode ? '第 ' + f.episode + ' 集 · ' + f.name : f.name)}</button>`).join('')}`;
@@ -165,67 +254,97 @@
     }
     if (kind === 'info') content = `<h2>播放信息</h2><p>${esc(S.playback.title)}<br>${esc(S.playback.technical?.container?.toUpperCase() || '')} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}<br>${esc(S.playback.technical?.video_info?.resolution || '')} · ${esc(S.playback.technical?.video_info?.bitrate || '')}<br>${esc(S.detail.item.imageQuality || '')} · ${esc(S.detail.item.audioQuality || '')}</p>`;
     $('#player-dialog').innerHTML = `<section class="player-dialog">${content}<button id="close-dialog">返回</button></section>`;
-    $('#close-dialog').onclick = closeDialog;
+    $('#close-dialog').onclick = dialogBack;
     root.querySelectorAll('[data-subdialog]').forEach(b => b.onclick = () => playerDialog(b.dataset.subdialog));
     root.querySelectorAll('[data-speed]').forEach(b => b.onclick = () => { video.playbackRate = Number(b.dataset.speed); closeDialog(); });
     root.querySelectorAll('[data-ratio]').forEach(b => b.onclick = () => { video.style.objectFit = b.dataset.ratio; closeDialog(); });
     root.querySelectorAll('[data-audio]').forEach(b => b.onclick = () => { Array.from(video.audioTracks).forEach((t, n) => t.enabled = n === Number(b.dataset.audio)); closeDialog(); });
     root.querySelectorAll('[data-subtitle]').forEach(b => b.onclick = () => { Array.from(video.textTracks).forEach((t, n) => t.mode = n === Number(b.dataset.subtitle) ? 'showing' : 'disabled'); closeDialog(); });
-    root.querySelectorAll('[data-switch]').forEach(b => b.onclick = async () => { await reportProgress(true); video.pause(); await play(false, Number(b.dataset.switch)); });
+    root.querySelectorAll('[data-switch]').forEach(b => b.onclick = () => play(false, Number(b.dataset.switch)));
     focus(root.querySelector('.player-dialog button'));
   }
   function setup() {
-    S.route = 'settings'; ++S.epoch;
+    const epoch = beginView('settings');
     root.innerHTML = `<main class="screen setup"><h1>连接绿联 NAS</h1><p>${S.token ? '电视已配对。可更换服务地址或重新登录 NAS。' : '首次使用：输入 NAS 影视服务地址和配对码。'}</p><form class="form" id="pair-form"><label>影视服务地址<input id="server" placeholder="例如 http://192.168.1.100:8780" value="${esc(S.server)}" inputmode="url" autocomplete="url"></label><label>配对码<input id="pair-code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="六位数字"></label><div class="message" id="setup-message"></div><div class="actions"><button class="action" type="submit">连接</button>${S.token ? '<button class="action secondary" type="button" id="setup-back">返回</button>' : ''}</div></form>${S.token ? '<button class="episode" id="nas-login">重新登录 NAS 账号</button>' : ''}</main>`;
-    $('#pair-form').onsubmit = async e => {
-      e.preventDefault(); const address = $('#server').value.trim().replace(/\/$/, '');
+    const form = $('#pair-form'), addressInput = $('#server'), codeInput = $('#pair-code'), message = $('#setup-message'), submit = form.querySelector('button[type="submit"]');
+    form.onsubmit = async e => {
+      e.preventDefault(); if (submit.disabled) return; submit.disabled = true;
+      const address = addressInput.value.trim().replace(/\/$/, '');
       try {
         const url = new URL(address); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('请输入正确的 http:// 或 https:// 地址');
-        S.server = url.origin;
-        const data = await api('/api/pair', { code: $('#pair-code').value.trim(), name: 'LG webOS TV' });
-        S.token = data.token; store.set('server', S.server); store.set('token', S.token); home();
-      } catch (err) { $('#setup-message').textContent = err.message; }
+        const data = await api('/api/pair', { code: codeInput.value.trim(), name: 'LG webOS TV' }, undefined, { server: url.origin, token: '' });
+        if (epoch !== S.epoch || !form.isConnected) return;
+        S.server = url.origin; S.token = data.token; store.set('server', S.server); store.set('token', S.token); home();
+      } catch (err) { if (epoch === S.epoch && form.isConnected) message.textContent = err.message; }
+      finally { submit.disabled = false; }
     };
     if ($('#setup-back')) $('#setup-back').onclick = home;
     if ($('#nas-login')) $('#nas-login').onclick = loginForm;
     focus($('#server'));
   }
   function loginForm() {
+    const epoch = beginView('settings');
     root.innerHTML = '<main class="setup"><h1>登录 NAS</h1><p>使用 NAS 本地账号</p><form class="form" id="login-form"><label>用户名<input id="nas-user" autocomplete="username"></label><label>密码<input id="nas-password" type="password" autocomplete="current-password"></label><div class="message" id="setup-message"></div><div class="actions"><button class="action">登录</button><button class="action secondary" type="button" id="login-back">返回</button></div></form></main>';
-    $('#login-back').onclick = setup; $('#login-form').onsubmit = async e => { e.preventDefault(); try { await api('/api/login', { username: $('#nas-user').value, password: $('#nas-password').value }); $('#nas-password').value = ''; home(); } catch (err) { $('#nas-password').value = ''; $('#setup-message').textContent = err.message; } }; focus($('#nas-user'));
+    const form = $('#login-form'), username = $('#nas-user'), password = $('#nas-password'), message = $('#setup-message'), submit = form.querySelector('button');
+    $('#login-back').onclick = setup;
+    form.onsubmit = async e => {
+      e.preventDefault(); if (submit.disabled) return; submit.disabled = true;
+      try { await api('/api/login', { username: username.value, password: password.value }); if (epoch === S.epoch && form.isConnected) home(); }
+      catch (err) { if (epoch === S.epoch && form.isConnected) message.textContent = err.message; }
+      finally { password.value = ''; submit.disabled = false; }
+    }; focus(username);
   }
   function search() {
-    S.route = 'search'; ++S.epoch;
-    root.innerHTML = `${header('搜索')}${nav('search')}<main class="screen library-screen"><form id="search-form"><input class="search-box" id="search" placeholder="搜索 NAS 中的电影、电视剧" aria-label="搜索影片"><button class="action" style="margin-left:24px">搜索</button></form><div id="search-results" class="grid" style="margin-top:44px"></div></main>`;
-    $('#search-form').onsubmit = async e => { e.preventDefault(); try { const q = $('#search').value.trim(); if (!q) return; const data = await api('/api/search?q=' + encodeURIComponent(q)); $('#search-results').innerHTML = data.items.length ? data.items.map(i => card(i)).join('') : '<div class="empty">没有找到影片</div>'; bind(); focus($('#search-results button') || $('#search')); } catch (err) { toast(err.message); } }; bind(); focus($('#search'));
+    beginView('search'); S.searchView = { query: '', items: null }; renderSearch(); focus($('#search'));
+  }
+  function renderSearch() {
+    const epoch = S.epoch, state = S.searchView || { query: '', items: null };
+    root.innerHTML = `${header('搜索')}${nav('search')}<main class="screen library-screen"><form id="search-form"><input class="search-box" id="search" value="${esc(state.query)}" placeholder="搜索 NAS 中的电影、电视剧" aria-label="搜索影片"><button class="action" style="margin-left:24px">搜索</button></form><div id="search-results" class="grid" style="margin-top:44px">${state.items === null ? '' : state.items.length ? state.items.map(i => card(i)).join('') : '<div class="empty">没有找到影片</div>'}</div></main>`;
+    const form = $('#search-form'), input = $('#search'), results = $('#search-results');
+    form.onsubmit = async e => {
+      e.preventDefault(); const q = input.value.trim(); if (!q) return;
+      S.searchAbort?.abort(); const controller = new AbortController(); S.searchAbort = controller;
+      try {
+        const data = await api('/api/search?q=' + encodeURIComponent(q), undefined, controller.signal);
+        if (epoch !== S.epoch || S.searchAbort !== controller || !form.isConnected) return;
+        S.searchView = { query: q, items: data.items };
+        results.innerHTML = data.items.length ? data.items.map(i => card(i)).join('') : '<div class="empty">没有找到影片</div>'; bind(); focus(results.querySelector('button') || input);
+      } catch (err) { if (epoch === S.epoch && S.searchAbort === controller && form.isConnected) toast(err.message); }
+      finally { if (S.searchAbort === controller) S.searchAbort = null; }
+    }; bind();
+  }
+  function renderFolders() {
+    root.innerHTML = `${header('我的媒体库')}${nav('folders')}<main class="screen library-screen"><div class="shelf-row">${libraries()}</div></main>`; bind(); firstFocus();
   }
   function route(name, libraryId, title) {
     photoGallery.leave();
     S.exitConfirm = false; S.libraryId = libraryId || null; S.libraryTitle = title || null; S.busy = false;
-    if (name === 'photos') { S.route = 'photos'; ++S.epoch; return photoGallery.open(); }
+    if (name === 'photos') { beginView('photos'); return photoGallery.open(); }
     if (name === 'home') return home(); if (name === 'settings') return setup(); if (name === 'search') return search();
-    if (name === 'folders') { S.route = 'folders'; ++S.epoch; root.innerHTML = `${header('我的媒体库')}${nav('folders')}<main class="screen library-screen"><div class="shelf-row">${libraries()}</div></main>`; bind(); firstFocus(); return; }
-    S.route = name; loadLibrary(true);
+    if (name === 'folders') { beginView('folders'); renderFolders(); return; }
+    beginView(name); loadLibrary(true);
   }
   function bind() {
+    root.querySelectorAll('select').forEach(select => { if (select.dataset.cinemaSelect) return; select.dataset.cinemaSelect = 'true'; select.addEventListener('mousedown', e => { e.preventDefault(); focus(select); openSelect(select); }); });
     root.querySelectorAll('[data-route]').forEach(b => b.onclick = () => route(b.dataset.route));
     root.querySelectorAll('[data-item]').forEach(b => b.onclick = () => openDetail(b.dataset.item, Number(b.dataset.type), Number(b.dataset.library)));
     root.querySelectorAll('[data-library-route]').forEach(b => b.onclick = () => route('library', b.dataset.libraryRoute, b.dataset.title));
     root.querySelectorAll('[data-hero]').forEach(b => b.onclick = () => { S.hero = Number(b.dataset.hero); renderHome(); });
   }
   function back() {
+    if (S.selectPopup) { closeSelect(); return; }
     if (S.route === 'photos') { photoGallery.back(); return; }
-    if (S.route === 'player') { if (S.dialog && S.dialog !== 'error') closeDialog(); else stop(); return; }
-    if (S.route === 'detail') { const previous = S.returnRoute; if (previous === 'library') { S.route = previous; renderLibrary(); firstFocus(); } else route(previous); return; }
+    if (S.route === 'player') { if (S.dialog && S.dialog !== 'error') dialogBack(); else stop(); return; }
+    if (S.route === 'detail') { restoreView(); return; }
     if (S.route !== 'home') { home(); return; }
     const scroll = $('.screen'); if (scroll && scroll.scrollTop > 10) { scroll.scrollTop = 0; focus(root.querySelector('[data-primary]')); return; }
     if (!S.exitConfirm) { S.exitConfirm = true; toast('再按一次返回键退出'); setTimeout(() => S.exitConfirm = false, 2500); }
     else window.close();
   }
   function moveFocus(direction) {
-    const scope = S.route === 'player' ? (S.dialog ? $('.player-dialog') || $('#player-message') : $('.player-ui')) : root;
+    const scope = S.selectPopup?.element || (S.route === 'player' ? (S.dialog === 'error' ? $('#player-message') : S.dialog ? $('.player-dialog') : $('.player-ui')) : root);
     if (!scope) return;
-    const all = Array.from(scope.querySelectorAll('button,input,select')).filter(el => !el.disabled && el.offsetParent !== null);
+    const all = Array.from(scope.querySelectorAll('button,input,select,[tabindex="0"]')).filter(el => !el.disabled && el.offsetParent !== null);
     const current = document.activeElement;
     if (!all.includes(current)) { focus(all[0]); return; }
     const a = current.getBoundingClientRect(); const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
@@ -243,20 +362,30 @@
   }
   document.addEventListener('keydown', e => {
     const code = e.keyCode; const input = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
-    if (code === 461 || (e.key === 'Escape') || (code === 8 && !input)) { e.preventDefault(); back(); return; }
+    if (code === 461 || (e.key === 'Escape') || (code === 8 && !input)) { e.preventDefault(); if (!e.repeat) back(); return; }
     if (S.route === 'photos' && photoGallery.key(e)) return;
     const direction = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' }[code];
-    if (input && (document.activeElement.tagName === 'SELECT' || ![38, 40].includes(code))) return;
+    if (document.activeElement?.tagName === 'SELECT' && (code === 13 || e.code === 'Space')) { e.preventDefault(); openSelect(document.activeElement); return; }
+    if (input && document.activeElement.tagName !== 'SELECT' && ![38, 40].includes(code)) return;
     if (S.route === 'player') {
-      if ([415, 19, 179, 10252].includes(code) || (e.code === 'Space')) { e.preventDefault(); togglePause(); return; }
-      if (!S.dialog && (code === 37 || code === 39)) { e.preventDefault(); const duration = Number.isFinite(video.duration) ? video.duration : S.playback.duration; video.currentTime = Math.max(0, Math.min(duration - .5, video.currentTime + (code === 39 ? 10 : -10))); updateProgress(); showControls(); return; }
-      if (code === 13 && !S.controls && !S.dialog) { e.preventDefault(); togglePause(); return; }
-      if (direction && !S.controls) { e.preventDefault(); showControls(); focus($('#pause')); return; }
+      if (code === 415 || code === 19) { e.preventDefault(); setPaused(code === 19); return; }
+      if ([179, 10252].includes(code) || e.code === 'Space') { e.preventDefault(); if (!e.repeat) togglePause(); return; }
+      if (code === 413) { e.preventDefault(); stop(); return; }
+      if ([412, 417].includes(code) && !S.dialog) { e.preventDefault(); seek(code === 417 ? 10 : -10); return; }
+      if (!S.dialog) {
+        const current = document.activeElement;
+        if ((code === 37 || code === 39) && (!S.controls || current?.id === 'player-seek')) { e.preventDefault(); seek(code === 39 ? 10 : -10); return; }
+        if (code === 13 && (!S.controls || current?.id === 'player-seek')) { e.preventDefault(); if (!e.repeat) togglePause(); focus($('#pause')); return; }
+        if (direction && !S.controls) { e.preventDefault(); showControls(); focus(code === 38 ? $('#player-seek') : $('#pause')); return; }
+        if (code === 38 && $('.player-buttons')?.contains(current)) { e.preventDefault(); showControls(); focus($('#player-seek')); return; }
+        if (code === 40 && current?.id === 'player-seek') { e.preventDefault(); showControls(); focus($('#pause')); return; }
+      }
       showControls();
     }
     if (direction) { e.preventDefault(); moveFocus(direction); }
   });
   document.addEventListener('mousemove', () => { if (S.route === 'player') showControls(); });
+  root.addEventListener('focusin', () => { const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
   video.addEventListener('loadedmetadata', () => { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updateProgress(); });
   video.addEventListener('timeupdate', () => { updateProgress(); reportProgress(); });
   video.addEventListener('pause', () => { if (S.route === 'player') { if ($('#pause')) $('#pause').textContent = '播放'; showControls(); reportProgress(true); } });

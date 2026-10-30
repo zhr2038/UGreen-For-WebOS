@@ -92,7 +92,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const url = new URL(req.url, 'http://localhost');
   try {
-    if (url.pathname === '/health') return json(res, 200, { ok: true, name: 'LG NAS Cinema', version: '0.2.0' });
+    if (url.pathname === '/health') return json(res, 200, { ok: true, name: 'LG NAS Cinema', version: '0.2.1' });
     if (url.pathname === '/api/pair' && req.method === 'POST') {
       const ip = req.socket.remoteAddress;
       const last = attempts.get(ip) || { count: 0, at: Date.now() };
@@ -167,7 +167,7 @@ const server = http.createServer(async (req, res) => {
         if (!file?.path) return json(res, 404, { error: '影片文件不存在' });
         const id = randomBytes(20).toString('hex');
         plays.set(id, { owner, item: d.item, file, created: Date.now() });
-        return json(res, 200, { id, stream: '/media/' + id, title: file.title ? d.item.name + ' · ' + file.title : d.item.name, position: p.restart ? 0 : (file.path === d.raw.play_status?.recently_played_file_path ? d.item.position : 0), duration: file.duration || d.item.duration, technical: d.raw.media_info || null });
+        return json(res, 200, { id, stream: '/media/' + id, fileIndex: Math.max(0, index), title: file.title ? d.item.name + ' · ' + file.title : d.item.name, position: p.restart ? 0 : (file.path === d.raw.play_status?.recently_played_file_path ? d.item.position : 0), duration: file.duration || d.item.duration, technical: d.raw.media_info || null });
       }
       if (url.pathname === '/api/progress' && req.method === 'POST') {
         const p = await body(req); const play = plays.get(p.id);

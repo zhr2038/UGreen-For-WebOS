@@ -11,7 +11,7 @@
     function stopMedia() {
       clearTimeout(slideTimer); clearTimeout(hideTimer); ++G.imageGeneration;
       const clip = $('#photo-clip');
-      if (clip) { clip.pause(); clip.removeAttribute('src'); clip.load(); }
+      if (clip) { clip.onplay = clip.onpause = clip.onloadeddata = clip.onended = clip.onerror = null; clip.pause(); clip.removeAttribute('src'); clip.load(); }
       if (preload) { preload.onload = preload.onerror = null; preload.src = ''; preload = null; }
     }
     function leave() { G.active = false; G.playing = false; G.viewer = false; ++G.generation; stopMedia(); }
@@ -71,13 +71,28 @@
       clearTimeout(slideTimer);
       if (G.ready && G.playing && G.viewer && G.active && !document.hidden && !$('#photo-clip')) slideTimer = setTimeout(() => step(1), G.interval * 1000);
     }
-    function toggleSlideshow() {
-      G.playing = !G.playing;
+    function setSlideshow(playing) {
+      G.playing = playing;
       if ($('#photo-slideshow')) $('#photo-slideshow').textContent = G.playing ? '暂停幻灯片' : '播放幻灯片';
-      if (G.playing && $('#photo-clip')) $('#photo-clip').play().catch(() => {});
+      const clip = $('#photo-clip');
+      if (clip) { if (G.playing && clip.paused) clip.play().catch(() => {}); else if (!G.playing) clip.pause(); }
       else schedule();
       if (!G.playing) clearTimeout(slideTimer);
       showControls();
+    }
+    function toggleSlideshow() { setSlideshow(!G.playing); }
+    async function retryViewer() {
+      if (G.loading || !G.viewer) return;
+      G.loading = true; const generation = ++G.generation, id = G.data.items[G.index]?.id, oldIndex = G.index;
+      const retry = $('#photo-view-retry'); if (retry) retry.disabled = true;
+      try {
+        const data = await request(G.offset);
+        if (!G.active || !G.viewer || generation !== G.generation) return;
+        if (!data.items.length) throw new Error('这页照片已变更，请返回列表刷新');
+        G.data = data; const index = data.items.findIndex(p => p.id === id);
+        openViewer(index >= 0 ? index : Math.min(oldIndex, data.items.length - 1));
+      } catch (err) { if (G.active && G.viewer && generation === G.generation) { if (retry) retry.disabled = false; toast(err.message); } }
+      finally { if (generation === G.generation) G.loading = false; }
     }
     function transform() {
       const img = $('#photo-full'); if (!img) return;
@@ -98,16 +113,16 @@
         G.playing = false; clearTimeout(slideTimer); $('#photo-view-loading').style.display = 'none';
         $('#photo-slideshow').textContent = '播放幻灯片';
         $('#photo-view-error').innerHTML = `<p>${isVideo ? '电视无法播放这个视频，可能是编码不受支持。' : '照片加载失败，请检查 NAS 连接。'}</p><button id="photo-view-retry">重试</button><button id="photo-error-back">返回列表</button>`;
-        $('#photo-view-retry').onclick = () => openViewer(G.index); $('#photo-error-back').onclick = closeViewer; showControls(); focus($('#photo-error-back'));
+        $('#photo-view-retry').onclick = retryViewer; $('#photo-error-back').onclick = closeViewer; showControls(); focus($('#photo-error-back'));
       };
       if (isVideo) {
         const clip = $('#photo-clip');
-        $('#photo-video-pause').onclick = () => { if (clip.paused) clip.play().catch(failure); else clip.pause(); showControls(); };
-        clip.onplay = () => { $('#photo-video-pause').textContent = '暂停视频'; };
-        clip.onpause = () => { if ($('#photo-video-pause')) $('#photo-video-pause').textContent = '播放视频'; };
+        $('#photo-video-pause').onclick = () => { if (clip.paused) clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); else clip.pause(); showControls(); };
+        clip.onplay = () => { if (G.active && imageGeneration === G.imageGeneration && $('#photo-video-pause')) $('#photo-video-pause').textContent = '暂停视频'; };
+        clip.onpause = () => { if (G.active && imageGeneration === G.imageGeneration && $('#photo-video-pause')) $('#photo-video-pause').textContent = '播放视频'; };
         clip.onloadeddata = () => { if (imageGeneration === G.imageGeneration) $('#photo-view-loading').style.display = 'none'; };
-        clip.onended = () => { if (G.playing) step(1); else showControls(); }; clip.onerror = failure;
-        if (p.stream) { clip.src = asset(p.stream); clip.play().catch(failure); } else failure();
+        clip.onended = () => { if (!G.active || imageGeneration !== G.imageGeneration) return; if (G.playing) step(1); else showControls(); }; clip.onerror = failure;
+        if (p.stream) { clip.src = asset(p.stream); clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); } else failure();
       } else {
         const img = $('#photo-full'); img.alt = p.name;
         $('#photo-rotate').onclick = () => { G.rotation = (G.rotation + 90) % 360; transform(); showControls(); };
@@ -154,7 +169,9 @@
       }
       if (code === 13 && !G.controls) { e.preventDefault(); showControls(); focus($('#photo-slideshow')); return true; }
       if (code === 40 && !$('.photo-view-buttons')?.contains(document.activeElement)) { e.preventDefault(); showControls(); focus($('#photo-slideshow')); return true; }
-      if ([415, 19, 179, 10252].includes(code) || e.code === 'Space') { e.preventDefault(); toggleSlideshow(); return true; }
+      if (code === 415 || code === 19) { e.preventDefault(); setSlideshow(code === 415); return true; }
+      if ([179, 10252].includes(code) || e.code === 'Space') { e.preventDefault(); if (!e.repeat) toggleSlideshow(); return true; }
+      if (code === 413) { e.preventDefault(); closeViewer(); return true; }
       showControls(); return false;
     }
     document.addEventListener('mousemove', () => { if (G.active && G.viewer) showControls(); });

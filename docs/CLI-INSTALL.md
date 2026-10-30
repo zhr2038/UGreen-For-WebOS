@@ -38,7 +38,7 @@ ares-device.cmd --system-info --device lg-living-room
 
 ```powershell
 cd "$env:USERPROFILE\Downloads"
-ares-install.cmd --device lg-living-room .\top.hrhome.nascinema_0.2.0_all.ipk
+ares-install.cmd --device lg-living-room .\top.hrhome.nascinema_0.2.1_all.ipk
 ares-launch.cmd --device lg-living-room top.hrhome.nascinema
 ```
 
