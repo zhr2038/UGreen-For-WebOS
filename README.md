@@ -1,4 +1,4 @@
-# 云影视 · UGreen NAS for LG webOS
+# UGreen For WebOS
 
 在 LG 电视上浏览和播放绿联 NAS「影视中心」里的电影、电视剧，沿用已有海报、影片资料、收藏和观看进度，并浏览 NAS 现有相册。
 
@@ -13,7 +13,7 @@
 - NAS 预览图转换为最多 1920×1080 的 WebP，最多两张图片并行处理，缓存上限 24 MiB。视频原画直放，编码兼容性取决于电视；尚未提供原图 4K、AI 人物 / 地点分类、相册编辑或背景音乐。
 - 本地安装包：`dist/top.hrhome.nascinema_0.2.0_all.ipk`；服务端包：`dist/lg-nas-cinema-server-v0.2.0.zip`。
 
-**[下载安装包](https://github.com/zhr2038/UGreenNASWebOSAPP/releases/latest) · [第二台电视安装教程](#second-tv) · [首次部署 NAS](#nas-setup) · [常见问题](#faq)**
+**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest) · [第二台电视安装教程](#second-tv) · [首次部署 NAS](#nas-setup) · [常见问题](#faq)**
 
 个人使用的非官方客户端，与绿联、LG 没有官方合作关系。当前为**原画直放**，尚未实现实时转码、独立的内嵌字幕提取或外挂字幕加载。
 
@@ -35,7 +35,7 @@
 
 ### 1. 下载电视安装包，确认 NAS 地址
 
-在电脑打开 [Releases](https://github.com/zhr2038/UGreenNASWebOSAPP/releases/latest)，下载：
+在电脑打开 [Releases](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest)，下载：
 
 ```text
 top.hrhome.nascinema_0.2.0_all.ipk
@@ -166,7 +166,7 @@ App 会在这台电视记住连接信息。每台电视单独配对，使用同�
 
 ### 2. 下载服务端
 
-从 [Releases](https://github.com/zhr2038/UGreenNASWebOSAPP/releases/latest)下载：
+从 [Releases](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest)下载：
 
 ```text
 lg-nas-cinema-server-v0.2.0.zip

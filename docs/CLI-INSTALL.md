@@ -34,7 +34,7 @@ ares-device.cmd --system-info --device lg-living-room
 
 ## 3. 安装并启动
 
-从 [Releases](https://github.com/zhr2038/UGreenNASWebOSAPP/releases/latest)下载 .ipk，进入下载目录后执行：
+从 [Releases](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest)下载 .ipk，进入下载目录后执行：
 
 ```powershell
 cd "$env:USERPROFILE\Downloads"
