@@ -38,7 +38,7 @@
     return [Math.floor(sec / 3600), Math.floor(sec / 60) % 60, sec % 60].map(n => String(n).padStart(2, '0')).join(':');
   }
   function toast(text) { clearTimeout(toastTimer); $('#toast').textContent = text; $('#toast').classList.add('visible'); toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 4200); }
-  function focus(el) { if (!el) return; try { el.focus({ preventScroll: true }); } catch { el.focus(); } el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' }); }
+  function focus(el) { if (!el) return; try { el.focus({ preventScroll: true }); } catch { el.focus(); } if (!el.closest('.nav')) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' }); }
   function firstFocus() { focus(root.querySelector('[data-primary]') || root.querySelector('button,input,select')); }
   async function api(path, data, signal, connection = { server: S.server, token: S.token }) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 35000);
@@ -53,6 +53,7 @@
     S.playAbort?.abort(); S.playAbort = null; S.playStarting = false; S.playGeneration++;
   }
   function beginView(name) {
+    imageObserver?.disconnect(); imageObserver = null;
     if (name !== 'settings') directAuth?.leave();
     closeSelect(false);
     cancelPlayRequest();
@@ -96,8 +97,8 @@
     focus(original && (!view.focusKey || original.dataset.focus === view.focusKey) ? original : (view.focusKey ? root.querySelector(`[data-focus="${CSS.escape(view.focusKey)}"]`) : null) || root.querySelector('button'));
     const screen = root.querySelector('.screen'); if (screen) screen.scrollTop = view.scrollTop;
   }
-  function image(path, className = '', alt = '') { return path ? `<img class="${className}" src="${esc(asset(path))}" alt="${esc(alt)}" loading="lazy">` : ''; }
-  function header(title) { return `<header class="header"><img class="logo" src="logo.png" alt="云映"><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · ${connectionMode === 'direct' ? 'UGREENlink' : '兼容服务'}</span></header>`; }
+  function image(path, className = '', alt = '') { return path ? `<img class="${className}" ${className === 'backdrop' ? `src="${esc(asset(path))}" loading="eager" fetchpriority="high"` : `data-art-source="${esc(asset(path))}"`} alt="${esc(alt)}">` : ''; }
+  function header(title) { return `<header class="header"><span class="app-brand"><img src="icon-cloudframe.png" alt=""><b>云映</b></span><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · ${esc(S.home?.connection || (connectionMode === 'direct' ? 'UGREENlink' : '兼容服务'))}</span></header>`; }
   function nav(active) { return `<nav class="nav" aria-label="主导航">${['search', 'home', 'movies', 'tv', 'favorites', 'history', 'folders', 'photos', 'settings'].map(k => `<button data-route="${k}" class="${active === k ? 'active' : ''}" aria-label="${labels[k]}">${icon(k)}<span>${labels[k]}</span></button>`).join('')}</nav>`; }
   const photoGallery = window.createPhotoGallery({ root, api, asset, esc, header, nav, bind, focus, toast, store, exit: () => route('home') });
   function meta(item) { return [item.score > 0 ? Number(item.score).toFixed(1) : '', item.year || '', (item.genres || []).map(g => genres[g]).filter(Boolean).slice(0, 3).join(' · '), item.duration ? `${Math.floor(item.duration / 60)} 分钟` : ''].filter(Boolean).map(esc).join('　/　'); }
@@ -120,7 +121,7 @@
     try { const data = await api('/api/home'); if (epoch !== S.epoch) return; S.home = data; S.hero = 0; renderHome(); }
     catch (err) { if (epoch === S.epoch) errorScreen(err); }
   }
-  function loading() { root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
+  function loading() { imageObserver?.disconnect(); imageObserver = null; root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
   function errorScreen(error, retry = home) { root.innerHTML = `<div class="error-screen"><h1>暂时无法连接</h1><p>${esc(error.message)}</p><div class="actions"><button class="action" data-primary id="retry">重试</button><button class="action secondary" data-route="settings">连接设置</button></div></div>`; $('#retry').onclick = retry; bind(); firstFocus(); }
   function renderLibrary() {
     const title = S.libraryTitle || labels[S.route] || '全部影片';
@@ -340,11 +341,11 @@
     imageObserver?.disconnect();
     if (window.IntersectionObserver) {
       imageObserver = new IntersectionObserver(entries => entries.forEach(({ target, isIntersecting }) => {
-        if (isIntersecting) { if (!target.getAttribute('src') && target.dataset.artSource) target.src = target.dataset.artSource; }
+        if (isIntersecting) { target.loading = 'eager'; if (!target.getAttribute('src') && target.dataset.artSource) target.src = target.dataset.artSource; }
         else target.removeAttribute('src');
       }), { rootMargin: '180px' });
       root.querySelectorAll('.movie img,.photo-grid img,.photo-albums img').forEach(img => { img.dataset.artSource ||= img.getAttribute('src') || ''; imageObserver.observe(img); });
-    }
+    } else root.querySelectorAll('img[data-art-source]').forEach(img => { img.loading = 'lazy'; img.src = img.dataset.artSource; });
     root.querySelectorAll('select').forEach(select => { if (select.dataset.cinemaSelect) return; select.dataset.cinemaSelect = 'true'; select.addEventListener('mousedown', e => { e.preventDefault(); focus(select); openSelect(select); }); });
     root.querySelectorAll('[data-route]').forEach(b => b.onclick = () => route(b.dataset.route));
     root.querySelectorAll('[data-item]').forEach(b => b.onclick = () => openDetail(b.dataset.item, Number(b.dataset.type), Number(b.dataset.library)));
@@ -366,12 +367,31 @@
     const scope = S.selectPopup?.element || (S.route === 'player' ? (S.dialog === 'error' ? $('#player-message') : S.dialog ? $('.player-dialog') : $('.player-ui')) : root);
     if (!scope) return;
     const all = Array.from(scope.querySelectorAll('button,input,select,[tabindex="0"]')).filter(el => !el.disabled && el.offsetParent !== null);
-    const current = document.activeElement;
-    if (!all.includes(current)) { focus(all[0]); return; }
+    let current = document.activeElement;
+    if (!all.includes(current)) {
+      current = all.includes(S.lastContentFocus) ? S.lastContentFocus : scope.querySelector('[data-primary]') || all.find(el => !el.closest('.nav')) || all[0];
+      focus(current); return;
+    }
+    const inNav = current.closest('.nav');
+    if (inNav) {
+      const buttons = Array.from(inNav.querySelectorAll('button'));
+      if (direction === 'left') return;
+      if (direction === 'up' || direction === 'down') { focus(buttons[Math.max(0, Math.min(buttons.length - 1, buttons.indexOf(current) + (direction === 'up' ? -1 : 1)))]); return; }
+      if (all.includes(S.lastContentFocus) && !S.lastContentFocus.closest('.nav')) { focus(S.lastContentFocus); return; }
+    }
+    const row = current.closest('.shelf-row');
+    if (row && (direction === 'left' || direction === 'right')) {
+      const items = Array.from(row.querySelectorAll('button')).filter(el => !el.disabled);
+      const next = items[items.indexOf(current) + (direction === 'right' ? 1 : -1)];
+      if (next) focus(next);
+      else if (direction === 'left') focus(root.querySelector('.nav button.active'));
+      return;
+    }
     const a = current.getBoundingClientRect(); const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
     let winner, best = Infinity;
     for (const el of all) {
       if (el === current) continue;
+      if (!inNav && el.closest('.nav')) continue;
       const b = el.getBoundingClientRect(); const dx = b.left + b.width / 2 - ax, dy = b.top + b.height / 2 - ay;
       const forward = direction === 'left' ? -dx : direction === 'right' ? dx : direction === 'up' ? -dy : dy;
       if (forward <= 2) continue;
@@ -379,6 +399,7 @@
       const score = forward + side * 3.2;
       if (score < best) { best = score; winner = el; }
     }
+    if (!winner && direction === 'left' && !inNav && scope === root) winner = root.querySelector('.nav button.active');
     focus(winner);
   }
   document.addEventListener('keydown', e => {
@@ -403,10 +424,10 @@
       }
       showControls();
     }
-    if (direction) { e.preventDefault(); moveFocus(direction); }
+    if (direction) { e.preventDefault(); e.stopPropagation(); moveFocus(direction); }
   });
   document.addEventListener('mousemove', () => { if (S.route === 'player') showControls(); });
-  root.addEventListener('focusin', () => { const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
+  root.addEventListener('focusin', () => { if (root.contains(document.activeElement) && !document.activeElement.closest('.nav')) S.lastContentFocus = document.activeElement; const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
   video.addEventListener('loadedmetadata', () => { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updateProgress(); });
   video.addEventListener('timeupdate', () => { updateProgress(); reportProgress(); });
   video.addEventListener('pause', () => { if (S.route === 'player') { if ($('#pause')) $('#pause').textContent = '播放'; showControls(); reportProgress(true); } });

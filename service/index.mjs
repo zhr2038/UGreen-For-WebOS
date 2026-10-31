@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createBridge } from '../lib/bridge.mjs';
 import { DirectConnection } from '../lib/direct.mjs';
 import { NativeThumbnails } from '../lib/native-images.mjs';
+import { AdaptiveNas } from '../lib/adaptive-nas.mjs';
 
 const service = new Service('top.hrhome.nascinema.service');
 const dir = join(__dirname, '.state');
@@ -12,10 +13,11 @@ let starting;
 async function start() {
   if (!starting) starting = (async () => {
     const control = new DirectConnection({ dir, config }); await control.load();
+    const transport = new AdaptiveNas(config); await transport.select();
     const token = randomBytes(32).toString('hex');
-    const bridge = await createBridge({ dir, config, control, thumbnails: new NativeThumbnails(), host: '127.0.0.1', port: 0, clientToken: token });
-    control.onChange = () => { bridge.reset(); bridge.nas.httpsAgent.destroy(); };
-    return { server: 'http://127.0.0.1:' + bridge.server.address().port, token, runtimeVersion: '0.3.0', ...control.status() };
+    const bridge = await createBridge({ dir, config, control, thumbnails: new NativeThumbnails(), host: '127.0.0.1', port: 0, clientToken: token, nasClient: transport });
+    control.onChange = () => { bridge.reset(); transport.reset(); transport.select().catch(() => {}); };
+    return { server: 'http://127.0.0.1:' + bridge.server.address().port, token, runtimeVersion: '0.3.1', ...control.status() };
   })().catch(error => { starting = null; throw error; });
   return starting;
 }

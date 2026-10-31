@@ -2,9 +2,9 @@
 
 在 LG 电视上使用绿联 NAS 的影视中心和相册：海报墙、影片资料、收藏、继续观看、照片浏览和幻灯片。
 
-**v0.3.0 支持 UGREENlink 直接登录，NAS 不需要安装 Docker 容器。** 输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
+**v0.3.1 支持 UGREENlink 直接登录，NAS 不需要安装 Docker 容器。** 输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
 
-**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.0) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
+**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
 
 个人使用的非官方客户端，与绿联、LG 没有官方合作关系。项目使用未公开 UGOS 接口，固件或手机 App 升级后可能需要适配。
 
@@ -19,14 +19,14 @@
 
 与 0.2.x 不同，登录、接口访问、海报缓存、视频转发和播放记录同步都由电视 App 随附的 JS 服务完成。**无需 NAS 兼容服务地址，也无需六位 NAS 配对码。**
 
-当前直连实现走绿联官方的 **UGREENlink HTTPS 中继**。电视和 NAS 可以不在同一局域网，无需在路由器上手动映射 8780 端口。本项目没有部署自己的公网中继，也没有实现官方客户端的原生 P2P 加速；远程原画播放的流畅度取决于带宽和绿联中继能力。
+同一家庭网络优先选择经过证书和 NAS 身份校验的 **HTTPS 局域网直连**；其他网络或验证失败时使用绿联官方的 **UGREENlink HTTPS 中继**。电视和 NAS 可以不在同一局域网，无需在路由器上手动映射 8780 端口。本项目没有部署自己的公网中继，也没有实现官方客户端的原生 P2P 加速；远程原画播放的流畅度取决于带宽和绿联中继能力。
 
 <a id="second-tv"></a>
 ## 给另一台 LG 电视安装
 
 ### 1. 下载电视安装包
 
-在电脑打开 [v0.3.0 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.0)，下载：
+在电脑打开 [v0.3.1 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，下载：
 
 ```text
 CloudFrame.ipk
@@ -142,6 +142,6 @@ npm run package:tv
 
 `package:tv` 会构建二维码资源和电视 JS 服务，并将二者与界面一起打入 `dist` 的 `.ipk`。服务使用纯 JavaScript 和 Node 核心模块，不携带 `sharp` 或其他 C/C++ 扩展，也不需要 root 电视。
 
-服务测试、模拟界面测试与真实电视验证的范围见 [v0.3.0 变更与验证记录](docs/CHANGELOG-0.3.0.md)。界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=14-51)。
+服务测试、模拟界面测试与真实电视验证的范围见 [v0.3.1 变更与验证记录](docs/BUGFIX-0.3.1.md)。界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=14-51)。
 
 旧版可选 Docker 服务仍保留源码，供兼容模式使用。开发调试脚本、原始 Android APK、个人 NAS 地址、账号密码、会话、电视开发密钥和照片均不应提交到仓库或打进发布包。
