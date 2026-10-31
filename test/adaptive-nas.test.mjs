@@ -29,3 +29,9 @@ test('an old account request cannot be retried using the new account after reset
   let fail; const f = fixture(); f.lan.request = () => new Promise((resolve, reject) => fail = reject); await f.nas.select(); const pending = f.nas.request('old-file'); f.nas.reset(); f.config.token = 'new-token'; fail(Object.assign(new Error('closed'), { code: 'ECONNRESET' }));
   await assert.rejects(pending, { name: 'AbortError' }); assert.equal(f.calls.some(c => c.startsWith('relay:')), false);
 });
+test('a playback snapshot keeps the original account and remains independently cloneable after close', () => {
+  const f = fixture(), snapshot = f.nas.snapshot(); f.config.token = 'new-account-token'; f.config.alias = 'another-device';
+  assert.equal(snapshot.config.token, 'private-token'); assert.equal(snapshot.config.alias, 'example');
+  assert.throws(() => { snapshot.config.token = 'wrong-account'; }); snapshot.close();
+  const second = snapshot.snapshot(); assert.equal(second.config.token, 'private-token'); assert.equal(second.config.server, 'https://example.zh9.ug.link'); second.close();
+});
