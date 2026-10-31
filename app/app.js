@@ -8,6 +8,8 @@
   };
   const S = { server: store.get('server', location.protocol.startsWith('http') ? location.origin : ''), token: store.get('token'), route: 'home', home: null, hero: 0, list: [], page: 1, last: true, detail: null, playback: null, returnRoute: 'home', returnView: null, dialog: null, controls: true, busy: false, epoch: 0, exitConfirm: false, playGeneration: 0, playStarting: false, pendingResume: new Map() };
   let toastTimer, controlsTimer, heroTimer;
+  let directAuth, connectionMode = store.get('connectionMode', 'direct');
+  let imageObserver;
   let progressTail = Promise.resolve();
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const icons = {
@@ -51,6 +53,7 @@
     S.playAbort?.abort(); S.playAbort = null; S.playStarting = false; S.playGeneration++;
   }
   function beginView(name) {
+    if (name !== 'settings') directAuth?.leave();
     closeSelect(false);
     cancelPlayRequest();
     S.searchAbort?.abort(); S.searchAbort = null;
@@ -94,7 +97,7 @@
     const screen = root.querySelector('.screen'); if (screen) screen.scrollTop = view.scrollTop;
   }
   function image(path, className = '', alt = '') { return path ? `<img class="${className}" src="${esc(asset(path))}" alt="${esc(alt)}" loading="lazy">` : ''; }
-  function header(title) { return `<header class="header"><img class="logo" src="logo.png" alt="UGREEN"><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · 局域网</span></header>`; }
+  function header(title) { return `<header class="header"><img class="logo" src="logo.png" alt="云映"><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · ${connectionMode === 'direct' ? 'UGREENlink' : '兼容服务'}</span></header>`; }
   function nav(active) { return `<nav class="nav" aria-label="主导航">${['search', 'home', 'movies', 'tv', 'favorites', 'history', 'folders', 'photos', 'settings'].map(k => `<button data-route="${k}" class="${active === k ? 'active' : ''}" aria-label="${labels[k]}">${icon(k)}<span>${labels[k]}</span></button>`).join('')}</nav>`; }
   const photoGallery = window.createPhotoGallery({ root, api, asset, esc, header, nav, bind, focus, toast, store, exit: () => route('home') });
   function meta(item) { return [item.score > 0 ? Number(item.score).toFixed(1) : '', item.year || '', (item.genres || []).map(g => genres[g]).filter(Boolean).slice(0, 3).join(' · '), item.duration ? `${Math.floor(item.duration / 60)} 分钟` : ''].filter(Boolean).map(esc).join('　/　'); }
@@ -264,6 +267,10 @@
     focus(root.querySelector('.player-dialog button'));
   }
   function setup() {
+    if (directAuth?.available && connectionMode === 'direct') { photoGallery.leave(); beginView('settings'); return directAuth.show(); }
+    return setupLegacy();
+  }
+  function setupLegacy() {
     const epoch = beginView('settings');
     root.innerHTML = `<main class="screen setup"><h1>连接绿联 NAS</h1><p>${S.token ? '电视已配对。可更换服务地址或重新登录 NAS。' : '首次使用：输入 NAS 影视服务地址和配对码。'}</p><form class="form" id="pair-form"><label>影视服务地址<input id="server" placeholder="例如 http://192.168.1.100:8780" value="${esc(S.server)}" inputmode="url" autocomplete="url"></label><label>配对码<input id="pair-code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="六位数字"></label><div class="message" id="setup-message"></div><div class="actions"><button class="action" type="submit">连接</button>${S.token ? '<button class="action secondary" type="button" id="setup-back">返回</button>' : ''}</div></form>${S.token ? '<button class="episode" id="nas-login">重新登录 NAS 账号</button>' : ''}</main>`;
     const form = $('#pair-form'), addressInput = $('#server'), codeInput = $('#pair-code'), message = $('#setup-message'), submit = form.querySelector('button[type="submit"]');
@@ -280,6 +287,11 @@
     };
     if ($('#setup-back')) $('#setup-back').onclick = home;
     if ($('#nas-login')) $('#nas-login').onclick = loginForm;
+    if (directAuth?.available) {
+      const switchMode = document.createElement('button'); switchMode.className = 'episode'; switchMode.textContent = '使用 UGREENlink 直接登录';
+      switchMode.onclick = () => { connectionMode = 'direct'; store.set('connectionMode', 'direct'); directAuth.init().catch(err => toast(err.message)); };
+      root.querySelector('main').appendChild(switchMode);
+    }
     focus($('#server'));
   }
   function loginForm() {
@@ -325,6 +337,14 @@
     beginView(name); loadLibrary(true);
   }
   function bind() {
+    imageObserver?.disconnect();
+    if (window.IntersectionObserver) {
+      imageObserver = new IntersectionObserver(entries => entries.forEach(({ target, isIntersecting }) => {
+        if (isIntersecting) { if (!target.getAttribute('src') && target.dataset.artSource) target.src = target.dataset.artSource; }
+        else target.removeAttribute('src');
+      }), { rootMargin: '180px' });
+      root.querySelectorAll('.movie img,.photo-grid img,.photo-albums img').forEach(img => { img.dataset.artSource ||= img.getAttribute('src') || ''; imageObserver.observe(img); });
+    }
     root.querySelectorAll('select').forEach(select => { if (select.dataset.cinemaSelect) return; select.dataset.cinemaSelect = 'true'; select.addEventListener('mousedown', e => { e.preventDefault(); focus(select); openSelect(select); }); });
     root.querySelectorAll('[data-route]').forEach(b => b.onclick = () => route(b.dataset.route));
     root.querySelectorAll('[data-item]').forEach(b => b.onclick = () => openDetail(b.dataset.item, Number(b.dataset.type), Number(b.dataset.library)));
@@ -333,6 +353,7 @@
   }
   function back() {
     if (S.selectPopup) { closeSelect(); return; }
+    if (S.route === 'settings' && directAuth?.available && connectionMode === 'direct') { directAuth.back(); return; }
     if (S.route === 'photos') { photoGallery.back(); return; }
     if (S.route === 'player') { if (S.dialog && S.dialog !== 'error') dialogBack(); else stop(); return; }
     if (S.route === 'detail') { restoreView(); return; }
@@ -395,5 +416,13 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden && S.route === 'player') { video.pause(); reportProgress(true); } });
   function resize() { const scale = Math.min(innerWidth / 1920, innerHeight / 1080); $('#stage').style.transform = `scale(${scale})`; $('#stage').style.left = ((innerWidth - 1920 * scale) / 2) + 'px'; $('#stage').style.top = ((innerHeight - 1080 * scale) / 2) + 'px'; }
   addEventListener('resize', resize); resize();
-  if (S.token) home(); else setup();
+  directAuth = window.createDirectLogin({ root, esc, store, bind, focus,
+    connected(gateway, status) { connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
+    bridgeMode() { connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
+    back: home,
+  });
+  if (directAuth.available && connectionMode !== 'bridge') {
+    beginView('settings'); root.innerHTML = '<main class="setup"><h1>正在连接 UGREENlink</h1><p>请稍候…</p></main>';
+    directAuth.init().catch(err => { toast(err.message); connectionMode = 'bridge'; setupLegacy(); });
+  } else if (S.token) home(); else setup();
 })();

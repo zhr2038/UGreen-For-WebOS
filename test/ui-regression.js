@@ -23,6 +23,13 @@ async page => {
     proto.play = function() { if (!this.__ready && this.__src && !window.__holdMetadata) { this.__ready = 4; queueMicrotask(() => this.dispatchEvent(new Event('loadeddata'))); } this.__paused = false; this.dispatchEvent(new Event('play')); if (window.__deferMediaPlay) return new Promise((resolve, reject) => this.__rejectPlay = reject); return Promise.resolve(); };
     proto.pause = function() { if (!this.paused) { this.__paused = true; this.dispatchEvent(new Event('pause')); const reject = this.__rejectPlay; this.__rejectPlay = null; if (reject) reject(new DOMException('play was interrupted by pause', 'AbortError')); } };
   });
+  await page.addInitScript(base => {
+    if (sessionStorage.getItem('ui.direct') !== '1') return;
+    window.PalmServiceBridge = class {
+      call() { queueMicrotask(() => this.onservicecallback(JSON.stringify({ returnValue: true, server: base, token: 'test-client' }))); }
+      cancel() {}
+    };
+  }, base);
   const response = async (route, data, status = 200) => {
     try { await route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization,Content-Type', 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); } catch { /* Navigation can abandon a mock response. */ }
   };
@@ -36,6 +43,13 @@ async page => {
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization,Content-Type' } });
     const call = { path: url.pathname, host: url.host, query: url.search, authorization: request.headers().authorization, body: request.postDataJSON() }; state.calls.push(call);
+    if (url.pathname === '/api/direct/status') return response(route, { connected: Boolean(state.directConnected), alias: 'example', username: 'viewer' });
+    if (url.pathname === '/api/direct/login') { if (state.directLoginGate) await state.directLoginGate.promise; if (state.directFail) return response(route, { error: 'NAS 用户名或密码错误' }, 401); state.directConnected = true; return response(route, { connected: true }); }
+    if (url.pathname === '/api/direct/qr/create') return response(route, { url: 'https://www.ugnas.com/scan?example=1', expiresAt: Date.now() + 60000, interval: 60 });
+    if (url.pathname === '/api/direct/qr/poll') return response(route, { state: state.qrState || 'waiting' });
+    if (url.pathname === '/api/direct/qr/retry') { state.qrState = 'waiting'; return response(route, { state: 'waiting' }); }
+    if (url.pathname === '/api/direct/logout') { state.directConnected = false; return response(route, { connected: false }); }
+    if (url.pathname === '/api/direct/cancel') return response(route, { ok: true });
     if (url.host.startsWith('bad-nas.test')) return response(route, { error: '配对码错误' }, 401);
     if (url.pathname === '/api/home') return response(route, { name: '测试 NAS', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
     if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; return response(route, { items: Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1)), total: 120, last: n >= 2 }); }
@@ -52,10 +66,11 @@ async page => {
     control = { calls: [], gates: [], playId: 0, photoRequests: 0 }; errors = [];
     page.removeAllListeners('pageerror'); page.on('pageerror', error => errors.push(error.message));
     await page.goto(base + '/blank.html');
-    await page.evaluate(base => { localStorage.clear(); localStorage.setItem('cinema.server', base); localStorage.setItem('cinema.token', 'test-client'); }, base);
+    await page.evaluate(base => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem('cinema.server', base); localStorage.setItem('cinema.token', 'test-client'); }, base);
     await page.goto(base); await page.waitForSelector('button[data-primary][data-item]');
   }
   async function detail() { await page.locator('button[data-primary][data-item]').click(); await page.waitForSelector('#play'); }
+  async function directLogin() { await page.evaluate(() => sessionStorage.setItem('ui.direct', '1')); await page.reload(); await page.waitForSelector('#direct-form'); }
   async function play() { await detail(); await page.locator('#play').click(); await page.waitForSelector('#pause'); }
   async function key(code) { await page.evaluate(code => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: code, bubbles: true })), code); }
   const cases = [];
@@ -193,6 +208,30 @@ async page => {
     await page.locator('[data-route="movies"]').click(); await page.waitForSelector('#load-more'); const gate = deferred(); control.gates.push(gate); control.pageGate = gate;
     await page.locator('#load-more').click(); await page.locator('#sort').selectOption('1'); await page.waitForSelector('[data-item="1001"]', { timeout: 1200 }); gate.resolve(); await delay(100);
     check(await page.locator('.grid .movie').count() === 60 && await page.locator('[data-item="61"]').count() === 0, 'Old pagination response polluted the newly sorted library');
+  });
+  await run('电视直连账号登录通过本机服务，不保存 NAS 密码', async () => {
+    await directLogin(); await page.locator('#direct-alias').fill('example'); await page.locator('#direct-user').fill('viewer'); await page.locator('#direct-password').fill('private-test-password');
+    await page.locator('#direct-form button[type="submit"]').click(); await page.waitForSelector('button[data-primary][data-item]');
+    check(control.calls.some(c => c.path === '/api/direct/login' && c.body.password === 'private-test-password'), 'Direct login did not use the on-TV service');
+    check(await page.evaluate(() => !JSON.stringify(localStorage).includes('private-test-password')), 'NAS password was saved in the browser');
+  });
+  await run('已扫码状态继续等待手机确认，成功后进入影视中心', async () => {
+    await directLogin(); await page.locator('#login-qr-tab').click(); await page.waitForSelector('#login-qr svg');
+    check(!await page.locator('#retry-qr').isVisible(), 'Retry appeared before a QR failure');
+    control.qrState = 'scanned'; await page.waitForFunction(() => document.querySelector('#direct-message')?.textContent.includes('已扫码'));
+    check(await page.locator('#login-qr svg').count() === 1, 'Scanned was treated as a failure');
+    control.directConnected = true; control.qrState = 'connected'; await page.waitForSelector('button[data-primary][data-item]');
+  });
+  await run('离开扫码页后，迟到的扫码结果不能自动切换页面', async () => {
+    await directLogin(); await page.locator('#login-qr-tab').click(); await page.waitForSelector('#login-qr svg'); await page.locator('#login-password-tab').click();
+    control.directConnected = true; control.qrState = 'connected'; await delay(180);
+    check(await page.locator('#direct-form').count() === 1, 'Cancelled QR flow navigated the app');
+  });
+  await run('扫码失败保留重试入口，失败密码会清空', async () => {
+    await directLogin(); control.directFail = true; await page.locator('#direct-password').fill('wrong'); await page.locator('#direct-form button[type="submit"]').click(); await page.waitForFunction(() => document.querySelector('#direct-message')?.textContent.includes('错误'));
+    check(await page.locator('#direct-password').inputValue() === '', 'Failed password remained in the form');
+    await page.locator('#login-qr-tab').click(); await page.waitForSelector('#login-qr svg'); control.qrState = 'error'; await page.waitForSelector('#retry-qr:visible');
+    await page.locator('#retry-qr').click(); await delay(100); check(control.calls.some(c => c.path === '/api/direct/qr/retry'), 'QR retry was not sent');
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases };
   check(cases.length, 'No UI checks matched the filter');

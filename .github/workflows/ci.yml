@@ -35,10 +35,11 @@ jobs:
       - run: npm run package:tv
         env:
           ARES_PROFILE: tv
+      - run: python tools/check-tv-package.py
       - uses: actions/upload-artifact@v7
         with:
           name: webos-ipk
-          path: dist/*.ipk
+          path: dist/CloudFrame.ipk
 
   test-ui:
     runs-on: ubuntu-latest

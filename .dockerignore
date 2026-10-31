@@ -8,5 +8,6 @@ test
 tools/*
 !tools/configure-nas.mjs
 !tools/pair-code.mjs
+!tools/build-assets.mjs
 state
 .git

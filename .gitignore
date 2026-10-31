@@ -1,5 +1,6 @@
 .local/
 node_modules/
+app/qr.js
 dist/
 .env
 .env.*

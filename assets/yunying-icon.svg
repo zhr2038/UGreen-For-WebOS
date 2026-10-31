@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>云映</title>
+  <rect width="512" height="512" fill="#102328"/>
+  <rect x="106" y="122" width="300" height="268" rx="52" fill="none" stroke="#4CE2AF" stroke-width="28"/>
+  <path d="M218 209C218 201 225 197 232 201L316 249C323 253 323 261 316 265L232 313C225 317 218 313 218 305Z" fill="#F3FFF9"/>
+  <circle cx="345" cy="187" r="16" fill="#4CE2AF"/>
+</svg>

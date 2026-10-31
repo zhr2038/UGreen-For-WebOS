@@ -4,6 +4,8 @@
 
 | 工具 | 用途 |
 | --- | --- |
+| package-tv.mjs | 构建二维码资源和电视 JS 服务，连同界面打入一个 IPK；不要只打包 app 目录 |
+| build-assets.mjs | 从开源二维码库构建本地前端资源 |
 | configure-nas.mjs | 交互式配置 NAS 登录；Docker 运行依赖中已包含 |
 | pair-code.mjs | 生成 15 分钟有效的新配对码；不中断已有电视 |
 | package-server.py | 用 Python 标准库生成不包含运行凭据的服务端 ZIP |

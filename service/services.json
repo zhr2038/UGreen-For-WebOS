@@ -1,0 +1,5 @@
+{
+  "id": "top.hrhome.nascinema.service",
+  "description": "UGreen For WebOS connection service",
+  "services": [{ "name": "top.hrhome.nascinema.service" }]
+}

@@ -34,17 +34,17 @@ ares-device.cmd --system-info --device lg-living-room
 
 ## 3. 安装并启动
 
-从 [Releases](https://github.com/zhr2038/UGreen-For-WebOS/releases/latest)下载 .ipk，进入下载目录后执行：
+从 [v0.3.0](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.0)下载 .ipk，进入下载目录后执行：
 
 ```powershell
 cd "$env:USERPROFILE\Downloads"
-ares-install.cmd --device lg-living-room .\top.hrhome.nascinema_0.2.1_all.ipk
+ares-install.cmd --device lg-living-room .\CloudFrame.ipk
 ares-launch.cmd --device lg-living-room top.hrhome.nascinema
 ```
 
-随后按 README 的[获取 NAS 配对码和电视配对步骤](../README.md#second-tv)连接 NAS。
+随后按 README 的 [UGREENlink 登录说明](../README.md#login)，使用 NAS 用户名密码，或在手机绿联云中扫码确认。电视主页显示的应用名为 **云映**，不需要部署 NAS 容器。
 
-添加其他电视时，使用新的设备名称和它自己的 IP / Passphrase，重复添加和安装步骤即可，NAS 服务无需复制部署。
+添加其他电视时，使用新的设备名称和它自己的 IP / Passphrase，重复添加和安装步骤，并在新电视上登录 NAS。
 
 macOS/Linux 使用相同 ares 命令并去掉 .cmd；设置环境变量使用 export ARES_PROFILE=tv。
 
