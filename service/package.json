@@ -1,6 +1,6 @@
 {
   "name": "top.hrhome.nascinema.service",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "UGreen For WebOS on-device connection service",
   "main": "service.js"
 }

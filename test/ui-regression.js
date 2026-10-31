@@ -233,6 +233,29 @@ async page => {
     await page.locator('#login-qr-tab').click(); await page.waitForSelector('#login-qr svg'); control.qrState = 'error'; await page.waitForSelector('#retry-qr:visible');
     await page.locator('#retry-qr').click(); await delay(100); check(control.calls.some(c => c.path === '/api/direct/qr/retry'), 'QR retry was not sent');
   });
+  await run('内容焦点丢失后按右键仍留在内容区', async () => {
+    await page.locator('[data-route="movies"]').click(); await page.waitForSelector('.grid .movie'); await page.locator('.grid .movie').first().focus();
+    await page.evaluate(() => document.activeElement.blur()); await page.keyboard.press('ArrowRight');
+    check(await page.evaluate(() => Boolean(document.activeElement.dataset.item) && !document.activeElement.closest('.nav')), 'Right recovered focus into the navigation rail');
+  });
+  await run('横向片单末尾右键不跳行，左键进入导航不滚动页面', async () => {
+    const first = page.locator('.shelf-row .movie').first(); await page.locator('.shelf-row').first().locator('button').last().focus(); await page.keyboard.press('ArrowRight');
+    check(await page.evaluate(() => Boolean(document.activeElement.closest('.shelf-row'))), 'Right at the end escaped the horizontal shelf');
+    await first.focus();
+    const before = await page.locator('.screen').evaluate(el => el.scrollTop); await page.keyboard.press('ArrowLeft');
+    check(await page.evaluate(() => Boolean(document.activeElement.closest('.nav'))), 'Left at first item did not enter navigation');
+    check(await page.locator('.screen').evaluate(el => el.scrollTop) === before, 'Focusing fixed navigation scrolled the page');
+    await page.keyboard.press('ArrowRight'); check(await page.evaluate(() => Boolean(document.activeElement.closest('.shelf-row'))), 'Right did not restore the previous content focus');
+  });
+  await run('滚动后的页头视觉回归', async () => {
+    await page.locator('.screen').evaluate(el => el.scrollTop = 500); await delay(100);
+    await page.screenshot({ path: 'output/playwright/home-header-fixed.png' });
+  });
+  await run('选择弹窗内左右键不能逃到页面导航', async () => {
+    await page.locator('[data-route="movies"]').click(); await page.waitForSelector('#sort'); await page.locator('#sort').focus(); await page.keyboard.press('Enter'); await page.waitForSelector('.select-overlay');
+    for (const key of ['ArrowLeft', 'ArrowRight']) { await page.keyboard.press(key); check(await page.evaluate(() => Boolean(document.activeElement.closest('.select-overlay'))), 'Horizontal key escaped the select overlay'); }
+    await page.keyboard.press('Escape'); check(await page.evaluate(() => document.activeElement.id) === 'sort', 'Select did not restore focus');
+  });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases };
   check(cases.length, 'No UI checks matched the filter');
   if (report.failed) throw new Error(JSON.stringify(report));
