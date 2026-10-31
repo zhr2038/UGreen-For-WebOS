@@ -21,6 +21,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # Private-state tests intentionally reject path aliases. Windows runners
+      # can expose an 8.3 TEMP path even when the directory itself is ordinary.
+      - name: Use canonical Windows temporary directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node -e "const fs=require('node:fs');const p=fs.realpathSync(process.env.RUNNER_TEMP);console.log('TEMP='+p);console.log('TMP='+p)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: npm ci --no-audit --no-fund
       - run: npm test
 
