@@ -7,7 +7,7 @@ async page => {
   const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
   const movie = id => ({ id, libraryId: 1, type: 1, name: '示例影片 ' + id, year: 2026, score: 7, duration: 3600, position: 120, progress: .03, overview: '测试影片资料', clarity: 'HD', genres: [], poster: '/mock-image/poster', backdrop: '/mock-image/background', cover: '/mock-image/cover' });
   let control, errors;
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#225577"/></svg>';
+  const mockImage = Buffer.from(__UI_IMAGE_BASE64__, 'base64');
   await page.addInitScript(() => {
     const proto = HTMLMediaElement.prototype;
     Object.defineProperties(proto, {
@@ -35,10 +35,10 @@ async page => {
   };
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), request = route.request(), state = control;
-    if (url.pathname.startsWith('/mock-image/')) return route.fulfill({ contentType: 'image/svg+xml', body: svg });
+    if (url.pathname.startsWith('/mock-image/')) return route.fulfill({ contentType: 'image/png', body: mockImage });
     if (url.pathname.startsWith('/photo-image/')) {
       if (state.failPhoto && url.pathname.endsWith('/old')) return route.fulfill({ status: 503, body: 'offline' });
-      return route.fulfill({ contentType: 'image/svg+xml', body: svg });
+      return route.fulfill({ contentType: 'image/png', body: mockImage });
     }
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization,Content-Type' } });
