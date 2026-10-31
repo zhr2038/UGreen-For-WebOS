@@ -52,6 +52,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npx playwright-cli install-browser chrome
       - run: npm run test:ui
+      - run: node test/run-artwork-ui.mjs
 
   build-server:
     runs-on: ubuntu-latest

@@ -3,6 +3,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import sharp from 'sharp';
 
 const project = resolve(import.meta.dirname, '..');
 const cli = join(project, 'node_modules/@playwright/cli/playwright-cli.js');
@@ -23,7 +24,8 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
 const base = `http://127.0.0.1:${server.address().port}`;
-const code = (await readFile(join(project, 'test/ui-regression.js'), 'utf8')).replace('__UI_BASE_URL__', base).replace('__UI_FILTER__', JSON.stringify(process.env.CINEMA_UI_FILTER || ''));
+const mockImage = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#225577' } }).png().toBuffer();
+const code = (await readFile(join(project, 'test/ui-regression.js'), 'utf8')).replace('__UI_BASE_URL__', base).replace('__UI_FILTER__', JSON.stringify(process.env.CINEMA_UI_FILTER || '')).replace('__UI_IMAGE_BASE64__', JSON.stringify(mockImage.toString('base64')));
 const runtime = join(project, '.local/ui-regression-runtime.js');
 await writeFile(runtime, code);
 let log = '';

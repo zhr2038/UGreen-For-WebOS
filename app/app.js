@@ -2,12 +2,13 @@
   'use strict';
   const $ = selector => document.querySelector(selector);
   const root = $('#app'), video = $('#video');
+  const artwork = window.createArtworkLoader();
   const store = {
     get(k, fallback = '') { try { return localStorage.getItem('cinema.' + k) || fallback; } catch { return fallback; } },
     set(k, v) { try { localStorage.setItem('cinema.' + k, v); } catch {} },
   };
   const S = { server: store.get('server', location.protocol.startsWith('http') ? location.origin : ''), token: store.get('token'), route: 'home', home: null, hero: 0, list: [], page: 1, last: true, detail: null, playback: null, returnRoute: 'home', returnView: null, dialog: null, controls: true, busy: false, epoch: 0, exitConfirm: false, playGeneration: 0, playStarting: false, pendingResume: new Map() };
-  let toastTimer, controlsTimer, heroTimer;
+  let toastTimer, controlsTimer, heroTimer, lastNavigationAt = 0, lastNavigationCode;
   let directAuth, connectionMode = store.get('connectionMode', 'direct');
   let imageObserver;
   let progressTail = Promise.resolve();
@@ -53,6 +54,7 @@
     S.playAbort?.abort(); S.playAbort = null; S.playStarting = false; S.playGeneration++;
   }
   function beginView(name) {
+    artwork.clearView();
     imageObserver?.disconnect(); imageObserver = null;
     if (name !== 'settings') directAuth?.leave();
     closeSelect(false);
@@ -97,14 +99,14 @@
     focus(original && (!view.focusKey || original.dataset.focus === view.focusKey) ? original : (view.focusKey ? root.querySelector(`[data-focus="${CSS.escape(view.focusKey)}"]`) : null) || root.querySelector('button'));
     const screen = root.querySelector('.screen'); if (screen) screen.scrollTop = view.scrollTop;
   }
-  function image(path, className = '', alt = '') { return path ? `<img class="${className}" ${className === 'backdrop' ? `src="${esc(asset(path))}" loading="eager" fetchpriority="high"` : `data-art-source="${esc(asset(path))}"`} alt="${esc(alt)}">` : ''; }
+  function image(path, className = '', alt = '', kind = 'poster') { return path ? `<img class="${className}" data-art-source="${esc(asset(path))}" data-art-kind="${className === 'backdrop' ? 'backdrop' : kind}" alt="${esc(alt)}">` : ''; }
   function header(title) { return `<header class="header"><span class="app-brand"><img src="icon-cloudframe.png" alt=""><b>云映</b></span><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · ${esc(S.home?.connection || (connectionMode === 'direct' ? 'UGREENlink' : '兼容服务'))}</span></header>`; }
   function nav(active) { return `<nav class="nav" aria-label="主导航">${['search', 'home', 'movies', 'tv', 'favorites', 'history', 'folders', 'photos', 'settings'].map(k => `<button data-route="${k}" class="${active === k ? 'active' : ''}" aria-label="${labels[k]}">${icon(k)}<span>${labels[k]}</span></button>`).join('')}</nav>`; }
   const photoGallery = window.createPhotoGallery({ root, api, asset, esc, header, nav, bind, focus, toast, store, exit: () => route('home') });
   function meta(item) { return [item.score > 0 ? Number(item.score).toFixed(1) : '', item.year || '', (item.genres || []).map(g => genres[g]).filter(Boolean).slice(0, 3).join(' · '), item.duration ? `${Math.floor(item.duration / 60)} 分钟` : ''].filter(Boolean).map(esc).join('　/　'); }
   function card(item, wide = false) {
     const attributes = `data-item="${item.id}" data-type="${item.type}" data-library="${item.libraryId}" data-focus="item-${item.id}"`;
-    if (wide) return `<button class="movie continue" ${attributes}><div class="art">${image(item.cover || item.backdrop || item.poster, '', item.name)}<span class="progress"><i style="width:${item.progress * 100}%"></i></span></div><span class="name">${esc(item.name)}</span></button>`;
+    if (wide) return `<button class="movie continue" ${attributes}><div class="art">${image(item.cover || item.backdrop || item.poster, '', item.name, 'cover')}<span class="progress"><i style="width:${item.progress * 100}%"></i></span></div><span class="name">${esc(item.name)}</span></button>`;
     return `<button class="movie" ${attributes}>${image(item.poster || item.backdrop, '', item.name)}${item.clarity ? `<span class="quality">${esc(item.clarity)}</span>` : ''}${item.score > 0 ? `<span class="score">${Number(item.score).toFixed(1)}</span>` : ''}<span class="name">${esc(item.name)}</span><span class="year">${esc(item.year || '')}</span></button>`;
   }
   function shelf(title, items, wide = false, route) { if (!items?.length) return ''; return `<section class="shelf"><h2>${esc(title)}</h2><div class="shelf-row">${items.map(i => card(i, wide)).join('')}${route ? `<button class="library-shortcut" data-route="${route}">查看全部</button>` : ''}</div></section>`; }
@@ -121,7 +123,7 @@
     try { const data = await api('/api/home'); if (epoch !== S.epoch) return; S.home = data; S.hero = 0; renderHome(); }
     catch (err) { if (epoch === S.epoch) errorScreen(err); }
   }
-  function loading() { imageObserver?.disconnect(); imageObserver = null; root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
+  function loading() { artwork.clearView(); imageObserver?.disconnect(); imageObserver = null; root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
   function errorScreen(error, retry = home) { root.innerHTML = `<div class="error-screen"><h1>暂时无法连接</h1><p>${esc(error.message)}</p><div class="actions"><button class="action" data-primary id="retry">重试</button><button class="action secondary" data-route="settings">连接设置</button></div></div>`; $('#retry').onclick = retry; bind(); firstFocus(); }
   function renderLibrary() {
     const title = S.libraryTitle || labels[S.route] || '全部影片';
@@ -155,6 +157,7 @@
   function renderDetail() {
     const { item: i, files, actors, technical } = S.detail;
     root.innerHTML = `<main class="screen detail-screen">${image(i.backdrop, 'backdrop')}<div class="shade"></div><button class="back" id="back">${icon('back')}返回</button><div class="detail-copy"><h2>${esc(i.name)}</h2><p class="meta">${meta(i)}</p><p class="overview">${esc(i.overview)}</p><p class="meta">${[i.clarity, technical?.video_info?.codec?.toUpperCase(), i.imageQuality, i.audioQuality].filter(Boolean).map(esc).join(' · ')}</p><div class="actions"><button class="action" data-primary id="play">${i.position > 0 ? '继续播放 ' + time(i.position) : '立即播放'}</button><button class="action secondary" id="restart">从头播放</button><button class="action secondary" id="favorite">${i.favorite ? '已收藏' : '收藏'}</button></div></div>${files.length > 1 ? `<section class="details-section"><h3>${i.type === 2 ? '选集' : '播放版本'}</h3><div class="episodes">${files.map(f => `<button class="episode" data-file="${f.index}">${esc(f.episode ? '第 ' + f.episode + ' 集' : f.name)}</button>`).join('')}</div></section>` : ''}${actors.some(a => a.name) ? `<section class="details-section"><h3>演职人员</h3><div class="actor-list">${actors.filter(a => a.name).map(a => `<div>${esc(a.name)}<small>${esc(a.role || '')}</small></div>`).join('')}</div></section>` : ''}${technical ? `<section class="details-section"><h3>影片信息</h3><div class="technical">${esc(technical.container?.toUpperCase() || '')} · ${esc(technical.video_info?.resolution || '')} · ${esc(technical.video_info?.framerate || '')}<br>${(technical.audio_info || []).map(a => `${esc(a.language)} · ${esc(a.codec)} · ${esc(a.channels)} 声道`).join('<br>')}</div></section>` : ''}</main>`;
+    artwork.observe(root);
     $('#back').onclick = back; $('#play').onclick = () => play(); $('#restart').onclick = () => play(true);
     const favoriteButton = $('#favorite'); favoriteButton.onclick = async () => {
       if (favoriteButton.disabled) return; favoriteButton.disabled = true;
@@ -183,6 +186,7 @@
     finally { if (generation === S.playGeneration) { S.playStarting = false; S.playAbort = null; } }
   }
   function renderPlayer() {
+    artwork.clearView();
     root.innerHTML = `<div class="player-ui ${S.controls ? '' : 'hidden'}"><div class="player-top"><button class="back" style="position:static" id="stop-player" aria-label="返回">${icon('back')}</button><span>${esc(S.playback.title)}</span></div><div class="player-bottom"><div class="player-time"><b id="elapsed">${time(video.currentTime)}</b><span>/ <b id="duration">${time(video.duration || S.playback.duration)}</b></span></div><div class="seek" id="player-seek" tabindex="0" role="slider" aria-label="播放进度" aria-valuemin="0" aria-valuemax="${S.playback.duration || 0}" aria-valuenow="0"><i id="seek-progress"></i></div><div class="player-buttons"><button id="pause" data-primary>${video.paused ? '播放' : '暂停'}</button><button id="episode-list">列表</button><button id="player-settings">设置</button><button id="player-info">信息</button><span class="info">原画 · ${esc(S.detail.item.clarity)} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}</span></div><p class="player-hint">左右选择按钮 · 上键调整进度 · 下键返回按钮</p></div></div><div id="player-dialog"></div><div id="player-message"></div>`;
     $('#stop-player').onclick = stop; $('#pause').onclick = togglePause; $('#episode-list').onclick = () => playerDialog('episodes'); $('#player-settings').onclick = () => playerDialog('settings'); $('#player-info').onclick = () => playerDialog('info'); firstFocus(); updateProgress();
   }
@@ -338,14 +342,15 @@
     beginView(name); loadLibrary(true);
   }
   function bind() {
+    artwork.observe(root);
     imageObserver?.disconnect();
     if (window.IntersectionObserver) {
       imageObserver = new IntersectionObserver(entries => entries.forEach(({ target, isIntersecting }) => {
         if (isIntersecting) { target.loading = 'eager'; if (!target.getAttribute('src') && target.dataset.artSource) target.src = target.dataset.artSource; }
         else target.removeAttribute('src');
       }), { rootMargin: '180px' });
-      root.querySelectorAll('.movie img,.photo-grid img,.photo-albums img').forEach(img => { img.dataset.artSource ||= img.getAttribute('src') || ''; imageObserver.observe(img); });
-    } else root.querySelectorAll('img[data-art-source]').forEach(img => { img.loading = 'lazy'; img.src = img.dataset.artSource; });
+      root.querySelectorAll('.photo-grid img,.photo-albums img').forEach(img => { img.dataset.artSource ||= img.getAttribute('src') || ''; imageObserver.observe(img); });
+    } else root.querySelectorAll('.photo-grid img[data-art-source],.photo-albums img[data-art-source]').forEach(img => { img.loading = 'lazy'; img.src = img.dataset.artSource; });
     root.querySelectorAll('select').forEach(select => { if (select.dataset.cinemaSelect) return; select.dataset.cinemaSelect = 'true'; select.addEventListener('mousedown', e => { e.preventDefault(); focus(select); openSelect(select); }); });
     root.querySelectorAll('[data-route]').forEach(b => b.onclick = () => route(b.dataset.route));
     root.querySelectorAll('[data-item]').forEach(b => b.onclick = () => openDetail(b.dataset.item, Number(b.dataset.type), Number(b.dataset.library)));
@@ -409,6 +414,11 @@
     const direction = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' }[code];
     if (document.activeElement?.tagName === 'SELECT' && (code === 13 || e.code === 'Space')) { e.preventDefault(); openSelect(document.activeElement); return; }
     if (input && document.activeElement.tagName !== 'SELECT' && ![38, 40].includes(code)) return;
+    if (direction && S.route !== 'player') {
+      const now = performance.now();
+      if (e.repeat && lastNavigationCode === code && now - lastNavigationAt < 75) { e.preventDefault(); e.stopPropagation(); return; }
+      lastNavigationAt = now; lastNavigationCode = code;
+    }
     if (S.route === 'player') {
       if (code === 415 || code === 19) { e.preventDefault(); setPaused(code === 19); return; }
       if ([179, 10252].includes(code) || e.code === 'Space') { e.preventDefault(); if (!e.repeat) togglePause(); return; }
@@ -427,7 +437,8 @@
     if (direction) { e.preventDefault(); e.stopPropagation(); moveFocus(direction); }
   });
   document.addEventListener('mousemove', () => { if (S.route === 'player') showControls(); });
-  root.addEventListener('focusin', () => { if (root.contains(document.activeElement) && !document.activeElement.closest('.nav')) S.lastContentFocus = document.activeElement; const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
+  root.addEventListener('focusin', () => { if (root.contains(document.activeElement) && !document.activeElement.closest('.nav')) { S.lastContentFocus = document.activeElement; artwork.prioritize(document.activeElement.querySelector('img[data-art-kind]')); } const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
+  addEventListener('beforeunload', () => artwork.destroy());
   video.addEventListener('loadedmetadata', () => { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updateProgress(); });
   video.addEventListener('timeupdate', () => { updateProgress(); reportProgress(); });
   video.addEventListener('pause', () => { if (S.route === 'player') { if ($('#pause')) $('#pause').textContent = '播放'; showControls(); reportProgress(true); } });
@@ -438,7 +449,7 @@
   function resize() { const scale = Math.min(innerWidth / 1920, innerHeight / 1080); $('#stage').style.transform = `scale(${scale})`; $('#stage').style.left = ((innerWidth - 1920 * scale) / 2) + 'px'; $('#stage').style.top = ((innerHeight - 1080 * scale) / 2) + 'px'; }
   addEventListener('resize', resize); resize();
   directAuth = window.createDirectLogin({ root, esc, store, bind, focus,
-    connected(gateway, status) { connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
+    connected(gateway, status) { artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
     bridgeMode() { connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
     back: home,
   });
