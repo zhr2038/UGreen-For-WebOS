@@ -278,7 +278,7 @@
       if (!G.viewer) return;
       G.controls = true; $('.photo-viewer')?.classList.remove('clean');
       clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => { if (G.viewer && !G.infoOpen && !$('#photo-view-error')?.textContent) { G.controls = false; $('.photo-viewer')?.classList.add('clean'); } }, 5000);
+      hideTimer = setTimeout(() => { if (G.viewer && !G.infoOpen && (!G.uhdJob || G.uhdActive) && !$('#photo-view-error')?.textContent) { G.controls = false; $('.photo-viewer')?.classList.add('clean'); } }, 5000);
     }
     function schedule() {
       clearTimeout(slideTimer);

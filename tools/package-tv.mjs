@@ -8,7 +8,7 @@ const service = join(base, '.local/tv-package/service');
 const packageDir = join(base, '.local/tv-package/ipk');
 await mkdir(service, { recursive: true });
 await mkdir(packageDir, { recursive: true });
-await build({ entryPoints: [join(base, 'service/index.mjs')], outfile: join(service, 'service.js'), bundle: true, platform: 'node', format: 'cjs', target: 'node16', external: ['webos-service'], logLevel: 'warning' });
+await build({ entryPoints: [join(base, 'service/index.mjs')], outfile: join(service, 'service.js'), bundle: true, platform: 'node', format: 'cjs', target: 'node20', external: ['webos-service'], logLevel: 'warning' });
 for (const file of ['package.json', 'services.json']) await copyFile(join(base, 'service', file), join(service, file));
 const result = spawnSync(process.execPath, [join(base, 'node_modules/@webos-tools/cli/bin/ares-package.js'), join(base, 'app'), service, '-o', packageDir, '--no-minify'], { env: { ...process.env, ARES_PROFILE: 'tv' }, stdio: 'inherit', windowsHide: true });
 if (result.status !== 0) process.exit(result.status ?? 1);

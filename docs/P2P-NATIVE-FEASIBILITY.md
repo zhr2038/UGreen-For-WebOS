@@ -163,3 +163,5 @@ Bionic binding 的元数据也与 glibc 原生 binding 分开：要求 `isolated
 真实P2P验收仍须实际LINK_SELECT6/type4或5、同NAS实例/账号经选中通道认证、有限媒体字节，以及关闭/回退事实；type2、监听端口、源码或fake测试都不能替代它。跨公网/NAT与主App长期播放接入仍未完成。
 
 后续0.0.7真实probe已通过进程内DNS配置及SDK/PG库加载后的GOT guard，再收到sdk_init=-1；尚未start/选路/读取本机媒体。SDK双ABI反汇编明确存在logPath缺失/非字符串的拒绝分支，与此前省略字段一致。已准备恢复固定已存在private cwd路径与maxSize128，同时维持文件写开全拒、FSIZE0及日志抑制；不是通过放宽文件权限让它成功。负init提前kill/drop后续release帧的父进程诊断错误亦已离线修复，真实关闭仍需下一轮分开记录。
+
+0.0.8补回必填字段后实机sdk_init返回0、sdk_start_agent返回正句柄1，并收到READY0和候选本机端口；随后worker因信号退出，尚无LINK_SELECT4/5、本机认证或媒体字节。旧结果去敏将未知信号过度映射为OTHER，不能据此确定崩溃原因；下一诊断仅恢复有限信号名/null退出码，并查看自己runtime目录项元数据与/dev/null类型，不读取SDK日志内容或放宽文件/资源限制。READY仍只是监听启动消息，P2P验收尚未完成。

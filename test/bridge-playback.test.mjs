@@ -23,6 +23,7 @@ async function fixture(t){
       if(path.endsWith('/getMovie')){if(tracker.detailGate)await tracker.detailGate.promise;return{video_info:{ug_video_info_id:1,media_lib_set_id:1,category_id:'category-1',type:1,name:'Example',duration:3600,file_path:['/private/movie.mkv']},file_information:[{path:'/private/movie.mkv',duration:3600}],play_status:{recently_played_file_path:'/private/movie.mkv',current_play_time:12}};}
       if(path.endsWith('/pre_info')||path.endsWith('/info'))return{resolution:'1920x1080',transcode:[{name:'720P',resolution:'1280x720'}],audios:[],subtitle:[],redir_link:'/ugreen/v2/stream/transcode/play?video_name=example.mp4'};
       if(path.endsWith('/subtitle/list'))return{result:[]};
+      if(/\/collect\/(create|delete)$/.test(path)&&tracker.favoriteError)throw new Error('NAS favorite error '+nas.config.token+' /private/movie.mkv');
       if(path.endsWith('/recently_played/create')){if(tracker.progressError)throw new Error('NAS error '+nas.config.token+' /private/movie.mkv');tracker.writes.push({nas,token:nas.config.token,body:options.body});if(tracker.progressGate)await tracker.progressGate.promise;return{};}
       return{};
     },async open(path,options={}){
@@ -80,4 +81,18 @@ test('an in-flight play detail cancelled by reset returns 410 and releases its u
 
 test('progress failures do not disclose private NAS paths or the original account token',async t=>{
   const f=await fixture(t),play=await f.play();f.tracker.progressError=true;const result=await f.post('/api/progress',{id:play.id,position:50,duration:3600}),body=await result.text();assert.equal(result.status,502);assert.equal(body.includes(configA.token),false);assert.equal(body.includes('/private/movie.mkv'),false);
+});
+
+test('an in-flight favorite request cannot write using the replacement account after reset',async t=>{
+  const f=await fixture(t);f.tracker.detailGate=deferred();const pending=f.post('/api/favorite',{id:1,type:1,library:1,favorite:true});await until(()=>f.tracker.requests.some(value=>value.path.endsWith('/getMovie')));const details=f.tracker.requests.find(value=>value.path.endsWith('/getMovie'));
+  await f.bridge.reset();Object.assign(f.config,configB);f.tracker.detailGate.resolve();const result=await pending;assert.equal(result.status,410);assert.equal(f.tracker.requests.some(value=>/\/collect\/(create|delete)$/.test(value.path)),false);assert.equal(details.nas.destroyed,true);assert.equal(f.nas.destroyed,undefined);
+});
+
+test('favorite add/remove use an independent snapshot that is disposed after each completed operation',async t=>{
+  const f=await fixture(t);for(const favorite of [true,false]){const result=await f.post('/api/favorite',{id:1,type:1,library:1,favorite});assert.equal(result.status,200);const write=f.tracker.requests.at(-1);assert.equal(write.path,favorite?'v1/video/collect/create':'v1/video/collect/delete');assert.equal(write.token,configA.token);assert.notEqual(write.nas,f.nas);assert.equal(write.nas.destroyed,true);}assert.equal(f.nas.destroyed,undefined);
+});
+
+test('favorite detects a changed account without reset and provider write errors remain private',async t=>{
+  const f=await fixture(t);f.tracker.detailGate=deferred();const pending=f.post('/api/favorite',{id:1,type:1,library:1,favorite:true});await until(()=>f.tracker.requests.some(value=>value.path.endsWith('/getMovie')));Object.assign(f.config,configB);f.tracker.detailGate.resolve();assert.equal((await pending).status,410);assert.equal(f.tracker.requests.some(value=>/\/collect\/(create|delete)$/.test(value.path)),false);
+  f.tracker.favoriteError=true;const result=await f.post('/api/favorite',{id:1,type:1,library:1,favorite:false}),body=await result.text();assert.equal(result.status,502);assert.equal(body.includes(configB.token),false);assert.equal(body.includes('/private/movie.mkv'),false);assert.equal(f.tracker.requests.at(-1).nas.destroyed,true);
 });

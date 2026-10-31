@@ -1,7 +1,7 @@
-# 官方持久化目录迁移入口（尚未接线）
+# 电视私有状态迁移
 
-`lib/tv-state.mjs` 提供惰性 `createTvState`，当前没有修改service/index、移动真实会话、
-访问电视或改变ACG。默认新目录为：
+`service/index.mjs` 已在启动时依次调用 `checkWritable()`、`migrate()` 和
+`DirectConnection.load()`。`lib/tv-state.mjs` 提供惰性 `createTvState`，默认新目录为：
 
 ```text
 /media/internal/top.hrhome.nascinema.service.uid-<process.getuid()>
@@ -12,20 +12,18 @@ App ID固定，POSIX必须是当前UID，不能指定另一个UID。只创建这
 `private-state.mjs` 的canonical/无symlink/当前owner/regular+nlink1/FD锚定/0600约束。
 baseDir/trustedBaseDir覆盖仅供本地临时fixture或另行验证的明确配置，不能来自API用户输入。
 
-## 根后续接线
+## 启动顺序
 
 ```js
 const tvState = createTvState({legacyDir:join(__dirname,'.state')});
 await tvState.checkWritable(); // 新私有子目录里写/读/fsync非secret nonce，再按版本删除。
-// 先在C5 main真实UID验证上述能力；不要把probe的另一个UID结果当main证明。
 await tvState.migrate();       // 显式调用才复制/清理旧凭据。
 const control = new DirectConnection({dir:tvState.dir,config});
 await control.load();
 ```
 
 `prepare()`仅准备并检查私有子目录，`checkWritable()`使用固定storage-check格式，
-不会复制旧凭据；构造工厂本身无IO。普通服务启动是否正式采用迁移由root在实机验证后
-决定，这里不自动切路径、fallback覆盖、变更账号或重新登录。
+不会复制旧凭据；构造工厂本身无IO。启动不通过其他路径静默覆盖、改变账号或重新登录。
 
 迁移报告只含ready/complete/posixProtected及copied/removed/quarantined/retained计数，
 没有token、内容或旧路径。新目录从工厂私有dir属性交给DirectConnection，不应把整个
@@ -88,6 +86,8 @@ mode不变。真实WSL Linux与Windows语义测试均通过；Windows不冒充PO
 LG官方[JS Service Usage](https://webostv.developer.lge.com/develop/guides/js-service-usage)
 建议服务数据在/media/internal，并描述固定jail UID隔离。把状态与安装目录分离有官方
 方向依据；“以后升级不会再次改mode”仍是待实机验证的推断，不是文档承诺。
-应先验证main UID可写、原会话读回、App升级后owner/mode和账号保持，再正式接线。
-没有在本任务里迁移或重新加密真实文件；[Keymanager3](https://webostv.developer.lge.com/develop/references/keymanager3)
+已在 C5 主应用真实服务 UID 验证新目录可写、按白名单迁移、原会话读回和主页加载；
+随后升级到本地 0.4.0 候选包后，仍保留登录及主页访问。数据目录与安装目录分离，
+但卸载、系统清理、开发者模式失效等情形仍可能需要重新登录。没有重新加密会话；
+[Keymanager3](https://webostv.developer.lge.com/develop/references/keymanager3)
 的TEE只列为后续独立方案，未生成key、未改ACG或旧会话格式。

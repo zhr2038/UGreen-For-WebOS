@@ -2,9 +2,9 @@
 
 在 LG 电视上使用绿联 NAS 的影视中心和相册：海报墙、影片资料、收藏、继续观看、照片浏览和幻灯片。
 
-**v0.3.1 支持 UGREENlink 直接登录，NAS 不需要安装 Docker 容器。** 输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
+**v0.4.0 支持 UGREENlink 直接登录、NAS 动态画质、字幕设置和 4K 照片查看，NAS 不需要安装 Docker 容器。** 输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
 
-**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
+**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.0) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [本版更新](docs/CHANGELOG-0.4.0.md) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
 
 个人使用的非官方客户端，与绿联、LG 没有官方合作关系。项目使用未公开 UGOS 接口，固件或手机 App 升级后可能需要适配。
 
@@ -19,14 +19,14 @@
 
 与 0.2.x 不同，登录、接口访问、海报缓存、视频转发和播放记录同步都由电视 App 随附的 JS 服务完成。**无需 NAS 兼容服务地址，也无需六位 NAS 配对码。**
 
-同一家庭网络优先选择经过证书和 NAS 身份校验的 **HTTPS 局域网直连**；其他网络或验证失败时使用绿联官方的 **UGREENlink HTTPS 中继**。电视和 NAS 可以不在同一局域网，无需在路由器上手动映射 8780 端口。本项目没有部署自己的公网中继，也没有实现官方客户端的原生 P2P 加速；远程原画播放的流畅度取决于带宽和绿联中继能力。
+同一家庭网络优先选择经过证书和 NAS 身份校验的 **HTTPS 局域网直连**；其他网络或验证失败时使用绿联官方的 **UGREENlink HTTPS 中继**。电视和 NAS 可以不在同一局域网，无需在路由器上手动映射 8780 端口。**原生 P2P 加速留待后续版本，本版不启用。** 远程播放的流畅度取决于带宽、所选画质和绿联中继能力。
 
 <a id="second-tv"></a>
 ## 给另一台 LG 电视安装
 
 ### 1. 下载电视安装包
 
-在电脑打开 [v0.3.1 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，下载：
+在电脑打开 [v0.4.0 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.0)，下载：
 
 ```text
 CloudFrame.ipk
@@ -34,7 +34,7 @@ CloudFrame.ipk
 
 安装包文件名为 **CloudFrame.ipk**，电视首页的中文应用名为 **云映**。使用 UGREENlink 登录时不需要下载服务端 ZIP，也不需要编译源码。
 
-已实机验证 LG C5（OLED42C5PCA.ACNQLJD，固件 43.21.96、webOS SDK 11.2.0、Node.js 20.12.2）。直连服务以 Node.js 16 为最低构建目标，建议 webOS 24 及以上；其他型号尚未逐台验证。旧电视可尝试[旧版兼容服务模式](docs/LEGACY-BRIDGE.md)。本项目不是 Android APK，不支持 NetCast 电视。
+**v0.4.0 电视端要求 Node.js 20 运行时，当前支持基线为 webOS 26。** 实机验证机型是 LG C5（OLED42C5PCA.ACNQLJD，固件 43.21.96、SDK 11.2.0、Node.js 20.12.2）。webOS 24 / 25 的 Node 16 缺少新版相册所用的取消 API，不能直接视为本版支持；旧电视可先保留 [v0.3.1](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，其整机兼容性也需按型号验证。4K 照片还需要电视实际支持 WebCodecs 编码，普通预览不依赖这项能力。运行时版本可查 [LG 官方说明](https://webostv.developer.lge.com/develop/guides/js-service-basics)。本项目不是 Android APK，不支持 NetCast 电视。
 
 ### 2. 在电视开启 Developer Mode
 
@@ -90,16 +90,19 @@ Passphrase 区分大小写。安装时电脑与电视需要能通过局域网互
 
 登录确认查询由电视后台服务负责，暂时切换输入源不会仅因网页计时器暂停而丢失确认。退出 App 或取消扫码会取消当前流程。
 
-NAS 密码不会保存；登录会话保存在电视自己的服务目录。扫码使用临时 RSA 密钥解密手机授权的会话，项目不保存绿联云的云账号访问令牌。卸载 App、清除数据或部分安装环境中的更新操作可能需要重新登录。
+NAS 密码不会保存；登录会话保存在电视服务自己的私有持久化目录。新版按白名单迁移旧状态，并在 C5 升级后验证了登录保持。扫码使用临时 RSA 密钥解密手机授权的会话，项目不保存绿联云的云账号访问令牌。卸载 App、清除数据或开发者模式失效后可能需要重新登录。
 
 ## 功能与遥控器
 
 - **影视**：首页、海报墙、媒体库、电影 / 电视剧、搜索、详情、收藏、最近播放、续播、选集 / 版本及播放记录同步。
 - **播放按钮区**：左右键移动焦点；上键进入进度条，再用左右键快退 / 快进 10 秒；下键返回按钮区。控制栏隐藏时，左右键可直接快退 / 快进。
-- **相册**：时间线、已有相册、已有收藏、照片 / 视频筛选、排序；全屏左右翻页、旋转、放大、幻灯片。相册仅浏览，不上传、删除或重建 NAS 照片库。
-- **内存控制**：电视端缓存上限 24 MiB，限制同时读取图片的数量，并释放离开可视区域的海报。相册使用 NAS 生成的预览图。
+- **播放设置**：按 NAS 实际返回显示原画和转码档位，切换时保留位置；真实音轨 / 字幕轨、外挂与在线字幕、字幕偏移和样式、0.5–2 倍速、比例、顺序 / 循环及跳片头片尾。下载、删除字幕只在用户明确操作时调用。
+- **相册**：时间线、相册、文件夹、回忆、人物 / 地点 / 事物 / 宠物分类、搜索、已有收藏、筛选、排序和照片信息；全屏翻页、旋转、放大、实况动态部分和相册视频画质。
+- **幻灯片**：2 / 3 / 5 / 10 / 15 秒、顺序 / 随机 / 循环、适应 / 填充及 NAS 内置背景音乐；离开、后台或换账号时释放播放资源。
+- **4K 照片**：从原文件解码 JPEG / PNG / HEIF，在支持的电视上通过 3840×2160 视频平面显示。C5 已验证真实 NAS HEIF 和实际 UI 按钮路径；处理期间可以返回取消。该模式使用有损 AVC 编码，颜色可能与原图不同；不支持同时旋转、缩放，不等于原始色深 / HDR 或物理像素逐点验收。
+- **海报与内存**：限制缓存、并发读取及解码尺寸，使用 Worker 缩小海报并释放离屏图片；修复页头文字重叠、焦点误回侧栏和迟到请求恢复旧页面的问题。
 
-当前为 **原画直放**，没有实时转码、独立内嵌字幕提取或外挂字幕加载。音视频编码、DTS / TrueHD、杜比视界 Profile 和高码率兼容性仍由电视决定；UGREENlink 登录成功也不等于任意 4K 原画都能流畅播放。
+相册不上传、删除或重建 NAS 照片库。转码由 NAS 完成，画质档位由 NAS 和账号权限决定；音视频编码、DTS / TrueHD、杜比视界 Profile、音轨切换和高码率兼容性仍由电视决定。复杂 ASS 特效、物理 4K 色彩一致性及所有固件组合尚未验收，详见[功能对照](docs/FEATURE-PARITY.md)。
 
 ## 从 0.2.x 升级
 
@@ -125,7 +128,7 @@ NAS 上原来的 `lg-nas-cinema` 容器可以先保留，供仍使用旧版的�
 
 **能浏览但播放失败、无声或远程卡顿？**
 
-先尝试 H.264 / AVC＋AAC 的普通 MP4。原画播放不改变编码，也不降低码率；远程中继带宽不足或电视不支持音轨 / 封装时，本项目不会自动转码补救。
+先尝试 H.264 / AVC＋AAC 的普通 MP4，或在播放设置中选择 NAS 提供的较低画质及兼容音轨。原画不改变编码或码率；转码档位缺失时，请检查 NAS 的影视中心、权限和转码能力。
 
 **电视也是电脑显示器，测试会遮住电脑吗？**
 
@@ -137,11 +140,13 @@ NAS 上原来的 `lg-nas-cinema` 容器可以先保留，供仍使用旧版的�
 npm ci
 npm test
 npm run test:ui
+node tools/check-ui.mjs --photos
 npm run package:tv
+python tools/check-tv-package.py
 ```
 
-`package:tv` 会构建二维码资源和电视 JS 服务，并将二者与界面一起打入 `dist` 的 `.ipk`。服务使用纯 JavaScript 和 Node 核心模块，不携带 `sharp` 或其他 C/C++ 扩展，也不需要 root 电视。
+`package:tv` 会构建二维码、播放轨道资源、惰性加载的 HEIF Worker 资源和电视 JS 服务，一起打入 `dist/CloudFrame.ipk`。服务不携带 `sharp` 或 Android 私有 SDK，也不需要 root 电视。HEIF 使用 libheif-js / libheif / libde265 的 WebAssembly，随包保留许可；本版发布页另附对应源码包。
 
-服务测试、模拟界面测试与真实电视验证的范围见 [v0.3.1 变更与验证记录](docs/BUGFIX-0.3.1.md)。界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=14-51)。
+服务测试、模拟界面测试与真实电视验证的范围见 [v0.4.0 变更与验证记录](docs/CHANGELOG-0.4.0.md)，上一版见 [v0.3.1](docs/BUGFIX-0.3.1.md)。播放器和相册界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=19-56)。
 
 旧版可选 Docker 服务仍保留源码，供兼容模式使用。开发调试脚本、原始 Android APK、个人 NAS 地址、账号密码、会话、电视开发密钥和照片均不应提交到仓库或打进发布包。
