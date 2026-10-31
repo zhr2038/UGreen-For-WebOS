@@ -42,12 +42,16 @@
   function focus(el) { if (!el) return; try { el.focus({ preventScroll: true }); } catch { el.focus(); } if (!el.closest('.nav')) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' }); }
   function firstFocus() { focus(root.querySelector('[data-primary]') || root.querySelector('button,input,select')); }
   async function api(path, data, signal, connection = { server: S.server, token: S.token }) {
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 35000);
+    const controller = new AbortController(); let timedOut = false; const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 35000);
     const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
+    if (path === '/api/play/preferences' && data?.id === S.playback?.id) S.playback.preferencesChanged = true;
     try {
       const res = await fetch(connection.server + path, { method: data ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + connection.token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined, signal: controller.signal });
-      const result = await res.json(); if (!res.ok) throw new Error(result.error || '连接失败'); return result;
-    } catch (error) { if (error.name === 'AbortError') throw new Error('连接超时，请检查电视和 NAS 的网络'); throw error; }
+      const result = await res.json(); if (!res.ok) throw new Error(result.error || '连接失败');
+      if (path.startsWith('/api/play/options?')) { const p = S.playback; if (p && new URL(path, 'http://app').searchParams.get('id') === p.id) initializePlaybackOptions(p, result).catch(() => {}); }
+      return result;
+    } catch (error) { if (error.name === 'AbortError' && timedOut) throw new Error('连接超时，请检查电视和 NAS 的网络'); throw error; }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
   function cancelPlayRequest() {
@@ -102,7 +106,34 @@
   function image(path, className = '', alt = '', kind = 'poster') { return path ? `<img class="${className}" data-art-source="${esc(asset(path))}" data-art-kind="${className === 'backdrop' ? 'backdrop' : kind}" alt="${esc(alt)}">` : ''; }
   function header(title) { return `<header class="header"><span class="app-brand"><img src="icon-cloudframe.png" alt=""><b>云映</b></span><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · ${esc(S.home?.connection || (connectionMode === 'direct' ? 'UGREENlink' : '兼容服务'))}</span></header>`; }
   function nav(active) { return `<nav class="nav" aria-label="主导航">${['search', 'home', 'movies', 'tv', 'favorites', 'history', 'folders', 'photos', 'settings'].map(k => `<button data-route="${k}" class="${active === k ? 'active' : ''}" aria-label="${labels[k]}">${icon(k)}<span>${labels[k]}</span></button>`).join('')}</nav>`; }
-  const photoGallery = window.createPhotoGallery({ root, api, asset, esc, header, nav, bind, focus, toast, store, exit: () => route('home') });
+  const photoGallery = window.createPhotoGallery({ root, api, asset, esc, header, nav, bind, focus, toast, store, getConnection: () => ({ server: S.server, token: S.token }), videoPlane: () => S.route === 'photos' && !S.playback ? video : null, exit: () => route('home') });
+  const playerTracks = new window.CloudFramePlayback.MediaTrackController(video, {
+    store,
+    loadSubtitle: async (subtitleId, { signal }) => {
+      const p = S.playback; if (!p) throw new Error('播放已结束');
+      return (await api('/api/play/subtitle', { id: p.id, subtitleId, format: 'vtt', encoding: 'auto' }, signal, p.connection)).body;
+    },
+  });
+  const movieMedia = window.createMovieMedia({ video, api, asset, getPlayback: () => S.playback, onChange: updatePlayerInfo, onWarning: toast, captureTracks: () => playerTracks.capture(), restoreTracks: (saved, options) => playerTracks.restore(saved, options) });
+  const playerOptions = window.createPlayerOptions({ video, api, asset, root: () => $('#player-dialog'), getPlayback: () => S.playback, tracks: playerTracks, store, focus, toast,
+    onSourceSwitch: movieMedia.switchSource,
+    onClose() { if (S.dialog === 'advanced') { S.dialog = null; showControls(); focus(document.getElementById(S.dialogReturnFocus) || $('#player-settings')); } },
+  });
+  function updatePlayerInfo() { const p = S.playback, info = $('.player-buttons .info'); if (!p || !info) return; const pixels = video.videoWidth && video.videoHeight ? video.videoWidth + ' × ' + video.videoHeight : ''; info.textContent = p.kind === 'hls' ? [p.quality?.label, pixels, 'NAS 转码'].filter(Boolean).join(' · ') : [p.quality?.label || '原画', pixels || S.detail?.item.clarity, p.technical?.video_info?.codec?.toUpperCase()].filter(Boolean).join(' · '); }
+  function releasePlayback(p) { if (!p) return; (p.reportPromise || Promise.resolve()).finally(() => api('/api/play/close', { id: p.id }, undefined, p.connection)).catch(() => {}); }
+  function resumeKey(id, scope = S.accountScope) { return (scope || S.server + '|' + S.token) + '|' + String(id); }
+  async function initializePlaybackOptions(p, data) {
+    if (S.playback !== p) return;
+    playerOptions.hydrate(data);
+    playerTracks.updateMetadata(data);
+    await playerTracks.applyPreferences(data.preferences || {}, { metadata: data, isCurrent: () => S.playback === p });
+  }
+  async function loadPlaybackOptions(p) {
+    try {
+      await api('/api/play/options?id=' + encodeURIComponent(p.id), undefined, undefined, p.connection);
+    } catch { /* Original playback remains available when metadata is unavailable. */ }
+    try { const data = await api('/api/play/skips?id=' + encodeURIComponent(p.id) + '&duration=' + encodeURIComponent(video.duration || p.duration), undefined, undefined, p.connection); if (S.playback === p) { p.skips = data; if (playerOptions.active()) playerOptions.render(); } } catch {}
+  }
   function meta(item) { return [item.score > 0 ? Number(item.score).toFixed(1) : '', item.year || '', (item.genres || []).map(g => genres[g]).filter(Boolean).slice(0, 3).join(' · '), item.duration ? `${Math.floor(item.duration / 60)} 分钟` : ''].filter(Boolean).map(esc).join('　/　'); }
   function card(item, wide = false) {
     const attributes = `data-item="${item.id}" data-type="${item.type}" data-library="${item.libraryId}" data-focus="item-${item.id}"`;
@@ -120,7 +151,7 @@
   async function home() {
     photoGallery.leave();
     const epoch = beginView('home'); S.dialog = null; clearInterval(heroTimer); loading();
-    try { const data = await api('/api/home'); if (epoch !== S.epoch) return; S.home = data; S.hero = 0; renderHome(); }
+    try { const data = await api('/api/home'); if (epoch !== S.epoch) return; const scope = data.accountScope || S.server + '|' + S.token; if (S.accountScope && S.accountScope !== scope) photoGallery.reset(); S.home = data; S.accountScope = scope; S.hero = 0; renderHome(); }
     catch (err) { if (epoch === S.epoch) errorScreen(err); }
   }
   function loading() { artwork.clearView(); imageObserver?.disconnect(); imageObserver = null; root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
@@ -151,7 +182,8 @@
   async function openDetail(id, type, library, preserveRoute = false) {
     if (!preserveRoute) { S.returnRoute = S.route; S.returnView = captureView(); }
     const epoch = beginView('detail'); loading();
-    try { const data = await api(`/api/detail?id=${id}&type=${type}&library=${library}`); if (epoch !== S.epoch) return; const pending = S.pendingResume.get(String(id)); if (pending) { data.item.position = pending.position; data.resumeFileIndex = pending.fileIndex; } S.detail = data; renderDetail(); }
+    const key = resumeKey(id), pendingAtStart = S.pendingResume.get(key);
+    try { const data = await api(`/api/detail?id=${id}&type=${type}&library=${library}`); if (epoch !== S.epoch) return; const pending = S.pendingResume.get(key) || pendingAtStart; if (pending) { data.item.position = pending.position; data.resumeFileIndex = pending.fileIndex; } S.detail = data; renderDetail(); }
     catch (err) { if (epoch === S.epoch) errorScreen(err, () => openDetail(id, type, library, true)); }
   }
   function renderDetail() {
@@ -171,24 +203,28 @@
     if (S.playStarting || !S.detail || !['detail', 'player'].includes(S.route)) return;
     const detail = S.detail, i = detail.item, epoch = S.epoch, generation = ++S.playGeneration;
     const controller = new AbortController(); S.playAbort = controller; S.playStarting = true;
-    const selected = Number.isInteger(fileIndex) ? fileIndex : detail.resumeFileIndex;
-    if (S.route === 'player') { video.pause(); reportProgress(true); }
+    const selected = Number.isInteger(fileIndex) ? fileIndex : detail.resumeFileIndex, connection = { server: S.server, token: S.token }, scope = S.accountScope;
+    const key = resumeKey(i.id, scope), pendingAtStart = S.pendingResume.get(key);
+    const previous = S.playback;
+    if (S.route === 'player') { const snapshot = movieMedia.snapshot(); movieMedia.cancel(); playerOptions.close(); video.pause(); reportProgress(true, snapshot); }
     toast('正在打开影片…');
     try {
-      const data = await api('/api/play', { id: i.id, type: i.type, library: i.libraryId, restart, fileIndex: selected }, controller.signal);
-      if (generation !== S.playGeneration || epoch !== S.epoch || detail !== S.detail) return;
-      const pending = S.pendingResume.get(String(i.id));
+      const data = await api('/api/play', { id: i.id, type: i.type, library: i.libraryId, restart, fileIndex: selected }, controller.signal, connection);
+      if (generation !== S.playGeneration || epoch !== S.epoch || detail !== S.detail) { releasePlayback({ ...data, connection }); return; }
+      const pending = S.pendingResume.get(key) || pendingAtStart;
       if (!restart && pending && (selected === undefined || pending.fileIndex === undefined || selected === pending.fileIndex)) data.position = pending.position;
-      S.playback = { ...data, itemId: i.id, fileIndex: data.fileIndex ?? selected, connection: { server: S.server, token: S.token } }; S.route = 'player'; S.dialog = null; S.controls = true;
+      releasePlayback(previous); playerTracks.reset();
+      S.playback = { ...data, accountScope: data.accountScope || scope, itemId: i.id, fileIndex: data.fileIndex ?? selected, connection }; S.route = 'player'; S.dialog = null; S.controls = true;
+      playerTracks.setSource(data.preferenceScope || 'play:' + data.id);
       document.body.classList.add('playing'); video.src = asset(data.stream); video.load(); renderPlayer();
-      await video.play(); if (generation === S.playGeneration && S.route === 'player') showControls();
+      await video.play(); if (generation === S.playGeneration && S.route === 'player') { showControls(); loadPlaybackOptions(S.playback); }
     } catch (err) { if (generation === S.playGeneration && epoch === S.epoch && err.name !== 'AbortError') { toast(err.message); if (S.route === 'player') playerError(err.message); } }
     finally { if (generation === S.playGeneration) { S.playStarting = false; S.playAbort = null; } }
   }
   function renderPlayer() {
     artwork.clearView();
     root.innerHTML = `<div class="player-ui ${S.controls ? '' : 'hidden'}"><div class="player-top"><button class="back" style="position:static" id="stop-player" aria-label="返回">${icon('back')}</button><span>${esc(S.playback.title)}</span></div><div class="player-bottom"><div class="player-time"><b id="elapsed">${time(video.currentTime)}</b><span>/ <b id="duration">${time(video.duration || S.playback.duration)}</b></span></div><div class="seek" id="player-seek" tabindex="0" role="slider" aria-label="播放进度" aria-valuemin="0" aria-valuemax="${S.playback.duration || 0}" aria-valuenow="0"><i id="seek-progress"></i></div><div class="player-buttons"><button id="pause" data-primary>${video.paused ? '播放' : '暂停'}</button><button id="episode-list">列表</button><button id="player-settings">设置</button><button id="player-info">信息</button><span class="info">原画 · ${esc(S.detail.item.clarity)} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}</span></div><p class="player-hint">左右选择按钮 · 上键调整进度 · 下键返回按钮</p></div></div><div id="player-dialog"></div><div id="player-message"></div>`;
-    $('#stop-player').onclick = stop; $('#pause').onclick = togglePause; $('#episode-list').onclick = () => playerDialog('episodes'); $('#player-settings').onclick = () => playerDialog('settings'); $('#player-info').onclick = () => playerDialog('info'); firstFocus(); updateProgress();
+    $('#stop-player').onclick = stop; $('#pause').onclick = togglePause; $('#episode-list').onclick = () => playerDialog('episodes'); $('#player-settings').onclick = () => playerDialog('settings'); $('#player-info').onclick = () => playerDialog('info'); firstFocus(); updateProgress(); updatePlayerInfo();
   }
   function showControls() {
     if (S.route !== 'player') return;
@@ -218,14 +254,16 @@
     if ($('#seek-progress')) $('#seek-progress').style.width = Math.min(100, duration ? video.currentTime / duration * 100 : 0) + '%';
     if ($('#player-seek')) { $('#player-seek').setAttribute('aria-valuemax', Number.isFinite(duration) ? duration : 0); $('#player-seek').setAttribute('aria-valuenow', Math.floor(video.currentTime || 0)); $('#player-seek').setAttribute('aria-valuetext', time(video.currentTime) + ' / ' + time(duration)); }
   }
-  function reportProgress(force = false) {
+  function reportProgress(force = false, saved) {
     const p = S.playback;
-    if (!p || video.readyState < 1 || !Number.isFinite(video.duration) || video.duration <= 0 || (!force && Date.now() - (p.lastReportAt || 0) < 15000)) return Promise.resolve();
-    const snapshot = { id: p.id, position: Math.max(0, Math.min(video.duration, video.currentTime)), duration: video.duration, fileIndex: p.fileIndex };
+    const duration = saved?.duration ?? video.duration, position = saved?.position ?? video.currentTime;
+    if (!p || (!saved && (movieMedia.switching() || video.readyState < 1)) || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position) || (!force && Date.now() - (p.lastReportAt || 0) < 15000)) return Promise.resolve();
+    const snapshot = { id: p.id, position: Math.max(0, Math.min(duration, position)), duration, fileIndex: p.fileIndex };
     const key = `${snapshot.position}:${snapshot.duration}`;
     if (key === p.lastReportKey && !p.reportFailed) return p.reportPromise || Promise.resolve();
     p.lastReportAt = Date.now(); p.lastReportKey = key; p.reportFailed = false;
-    const itemId = String(p.itemId); S.pendingResume.set(itemId, snapshot);
+    const itemId = resumeKey(p.itemId, p.accountScope); S.pendingResume.set(itemId, snapshot);
+    while (S.pendingResume.size > 128) S.pendingResume.delete(S.pendingResume.keys().next().value);
     const job = progressTail.then(async () => {
       if (S.pendingResume.get(itemId) !== snapshot) return;
       await api('/api/progress', { id: snapshot.id, position: snapshot.position, duration: snapshot.duration }, undefined, p.connection);
@@ -237,15 +275,18 @@
   function stop() {
     if (S.route !== 'player') return;
     const playback = S.playback;
-    clearTimeout(controlsTimer); video.pause(); reportProgress(true);
-    if (video.readyState >= 1 && Number.isFinite(video.duration)) { S.detail.item.position = Math.max(0, Math.min(video.duration, video.currentTime)); S.detail.resumeFileIndex = playback?.fileIndex; }
-    beginView('detail'); S.playback = null; S.dialog = null;
+    const saved = movieMedia.snapshot();
+    movieMedia.cancel(); playerOptions.close(); playerTracks.reset();
+    clearTimeout(controlsTimer); video.pause(); reportProgress(true, saved);
+    if (saved || video.readyState >= 1 && Number.isFinite(video.duration)) { S.detail.item.position = saved?.position ?? Math.max(0, Math.min(video.duration, video.currentTime)); S.detail.resumeFileIndex = playback?.fileIndex; }
+    releasePlayback(playback); beginView('detail'); S.playback = null; S.dialog = null;
     video.removeAttribute('src'); video.load(); document.body.classList.remove('playing'); renderDetail();
   }
-  function closeDialog() { if (S.playStarting) cancelPlayRequest(); S.dialog = null; if ($('#player-dialog')) $('#player-dialog').innerHTML = ''; showControls(); focus(document.getElementById(S.dialogReturnFocus) || $('#pause')); }
+  function closeDialog() { playerOptions.close(); if (S.playStarting) cancelPlayRequest(); S.dialog = null; if ($('#player-dialog')) $('#player-dialog').innerHTML = ''; showControls(); focus(document.getElementById(S.dialogReturnFocus) || $('#pause')); }
   function dialogBack() { if (['audio', 'subtitle', 'speed', 'ratio'].includes(S.dialog)) playerDialog('settings'); else closeDialog(); }
   function playerDialog(kind) {
     if (!S.dialog) S.dialogReturnFocus = document.activeElement?.id;
+    if (kind === 'settings') { S.dialog = 'advanced'; showControls(); playerOptions.open('settings'); return; }
     S.dialog = kind; showControls();
     let content = '';
     if (kind === 'episodes') content = `<h2>播放列表</h2>${S.detail.files.map(f => `<button data-switch="${f.index}">${esc(f.episode ? '第 ' + f.episode + ' 集 · ' + f.name : f.name)}</button>`).join('')}`;
@@ -260,7 +301,7 @@
       const tracks = Array.from(video.textTracks || []);
       content = `<h2>字幕</h2><button data-subtitle="-1">关闭字幕</button>${tracks.map((t, n) => `<button data-subtitle="${n}">${esc(t.label || t.language || '字幕 ' + (n + 1))}</button>`).join('')}${tracks.length ? '' : '<p>电视未返回字幕轨道。此版本暂不能提取片源内嵌的 ASS / PGS 字幕。</p>'}`;
     }
-    if (kind === 'info') content = `<h2>播放信息</h2><p>${esc(S.playback.title)}<br>${esc(S.playback.technical?.container?.toUpperCase() || '')} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}<br>${esc(S.playback.technical?.video_info?.resolution || '')} · ${esc(S.playback.technical?.video_info?.bitrate || '')}<br>${esc(S.detail.item.imageQuality || '')} · ${esc(S.detail.item.audioQuality || '')}</p>`;
+    if (kind === 'info') content = `<h2>播放信息</h2><p>${esc(S.playback.title)}<br>当前播放：${esc(S.playback.quality?.label || '原画')} · ${video.videoWidth || '—'} × ${video.videoHeight || '—'}${S.playback.kind === 'hls' ? ' · NAS 转码' : ''}</p><p>原文件：${esc(S.playback.technical?.container?.toUpperCase() || '')} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}<br>${esc(S.playback.technical?.video_info?.resolution || '')} · ${esc(S.playback.technical?.video_info?.bitrate || '')}<br>${esc(S.detail.item.imageQuality || '')} · ${esc(S.detail.item.audioQuality || '')}</p>`;
     $('#player-dialog').innerHTML = `<section class="player-dialog">${content}<button id="close-dialog">返回</button></section>`;
     $('#close-dialog').onclick = dialogBack;
     root.querySelectorAll('[data-subdialog]').forEach(b => b.onclick = () => playerDialog(b.dataset.subdialog));
@@ -286,7 +327,7 @@
         const url = new URL(address); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('请输入正确的 http:// 或 https:// 地址');
         const data = await api('/api/pair', { code: codeInput.value.trim(), name: 'LG webOS TV' }, undefined, { server: url.origin, token: '' });
         if (epoch !== S.epoch || !form.isConnected) return;
-        S.server = url.origin; S.token = data.token; store.set('server', S.server); store.set('token', S.token); home();
+        photoGallery.reset(); S.server = url.origin; S.token = data.token; store.set('server', S.server); store.set('token', S.token); home();
       } catch (err) { if (epoch === S.epoch && form.isConnected) message.textContent = err.message; }
       finally { submit.disabled = false; }
     };
@@ -306,7 +347,7 @@
     $('#login-back').onclick = setup;
     form.onsubmit = async e => {
       e.preventDefault(); if (submit.disabled) return; submit.disabled = true;
-      try { await api('/api/login', { username: username.value, password: password.value }); if (epoch === S.epoch && form.isConnected) home(); }
+      try { await api('/api/login', { username: username.value, password: password.value }); if (epoch === S.epoch && form.isConnected) { photoGallery.reset(); home(); } }
       catch (err) { if (epoch === S.epoch && form.isConnected) message.textContent = err.message; }
       finally { password.value = ''; submit.disabled = false; }
     }; focus(username);
@@ -408,6 +449,7 @@
     focus(winner);
   }
   document.addEventListener('keydown', e => {
+    if (S.route === 'player' && playerOptions.key(e)) return;
     const code = e.keyCode; const input = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
     if (code === 461 || (e.key === 'Escape') || (code === 8 && !input)) { e.preventDefault(); if (!e.repeat) back(); return; }
     if (S.route === 'photos' && photoGallery.key(e)) return;
@@ -439,17 +481,30 @@
   document.addEventListener('mousemove', () => { if (S.route === 'player') showControls(); });
   root.addEventListener('focusin', () => { if (root.contains(document.activeElement) && !document.activeElement.closest('.nav')) { S.lastContentFocus = document.activeElement; artwork.prioritize(document.activeElement.querySelector('img[data-art-kind]')); } const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
   addEventListener('beforeunload', () => artwork.destroy());
-  video.addEventListener('loadedmetadata', () => { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updateProgress(); });
-  video.addEventListener('timeupdate', () => { updateProgress(); reportProgress(); });
+  video.addEventListener('loadedmetadata', () => { if (S.route !== 'player') return; if (!movieMedia.switching()) { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updatePlayerInfo(); } updateProgress(); });
+  video.addEventListener('timeupdate', () => {
+    if (S.route !== 'player') return;
+    const p = S.playback;
+    if (p?.skips?.enabled && !movieMedia.switching() && !video.seeking) {
+      const range = p.skips.ranges?.find(r => video.currentTime >= r.start && video.currentTime < r.end);
+      if (range) { try { video.currentTime = Math.min(range.end, video.duration - .1); toast(range.type === 'op' ? '已跳过片头' : '已跳过片尾'); } catch {} }
+    }
+    updateProgress(); reportProgress();
+  });
   video.addEventListener('pause', () => { if (S.route === 'player') { if ($('#pause')) $('#pause').textContent = '播放'; showControls(); reportProgress(true); } });
   video.addEventListener('play', () => { if ($('#pause')) $('#pause').textContent = '暂停'; });
-  video.addEventListener('ended', async () => { await reportProgress(true); toast('播放结束'); showControls(); });
-  video.addEventListener('error', () => { if (S.route === 'player') playerError('电视无法播放这个片源。可能是音视频编码或封装格式不受支持。'); });
+  video.addEventListener('ended', async () => {
+    const p = S.playback; if (S.route !== 'player' || !p || movieMedia.switching()) return;
+    await reportProgress(true); if (S.playback !== p || S.route !== 'player') return;
+    const index = S.detail.files.findIndex(f => f.index === p.fileIndex), next = playerOptions.nextIndex(index, S.detail.files.length);
+    if (next !== null) play(true, S.detail.files[next].index); else { toast('播放结束'); showControls(); }
+  });
+  video.addEventListener('error', () => { if (S.route === 'player' && !movieMedia.switching()) playerError('电视无法播放这个片源。可能是音视频编码或封装格式不受支持。'); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && S.route === 'player') { video.pause(); reportProgress(true); } });
   function resize() { const scale = Math.min(innerWidth / 1920, innerHeight / 1080); $('#stage').style.transform = `scale(${scale})`; $('#stage').style.left = ((innerWidth - 1920 * scale) / 2) + 'px'; $('#stage').style.top = ((innerHeight - 1080 * scale) / 2) + 'px'; }
   addEventListener('resize', resize); resize();
   directAuth = window.createDirectLogin({ root, esc, store, bind, focus,
-    connected(gateway, status) { artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
+    connected(gateway, status) { photoGallery.reset(); artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
     bridgeMode() { connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
     back: home,
   });

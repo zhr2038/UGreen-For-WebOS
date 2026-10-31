@@ -106,3 +106,70 @@ test('late ASS renderer initialization is destroyed rather than displayed after 
   const renderer = { show() { this.shown = true; }, destroy() { this.destroyed = true; } }; release(renderer);
   assert.deepEqual(await pending, { cancelled: true }); assert.equal(renderer.destroyed, true); assert.equal(renderer.shown, undefined); assert.equal(slots[0].removed, true); controller.dispose();
 });
+
+test('capture/restore reapplies real audio and native subtitles after a same-movie load with reordered runtime indices',async()=>{
+  const {video,controller}=fixture();controller.selectAudio(controller.audioOptions()[1].id);controller.selectText(controller.textOptions()[1].id);controller.setOffset(.35);controller.setStyle({size:125,color:'#FFFF00'});controller.setRate(1.5);controller.setFit('cover');
+  const captured=controller.capture();video.dispatchEvent(new Event('emptied'));
+  video.audioTracks.items.reverse();video.audioTracks.items.forEach(t=>t.enabled=false);video.audioTracks.sync();video.textTracks.items.reverse();video.textTracks.sync();video.playbackRate=1;video.style.objectFit='contain';
+  const restored=await controller.restore(captured,{isCurrent:()=>true});assert.equal(restored.applied,true);assert.equal(video.audioTracks[0].language,'zh');assert.equal(video.audioTracks[0].enabled,true);assert.equal(video.textTracks[0].mode,'showing');assert.equal(controller.offset,.35);assert.equal(controller.style.size,125);assert.equal(video.playbackRate,1.5);assert.equal(video.style.objectFit,'cover');controller.dispose();
+});
+
+test('external capture restores same-session captions, delay and style without accumulating renderer tracks',async()=>{
+  const {video,controller}=fixture();controller.updateMetadata({subtitles:[{id:'external:one',kind:'external',label:'Movie.zh.srt',language:'zh'}]});await controller.selectExternal('external:one');controller.setOffset(.5);controller.setStyle({position:15});const snapshot=controller.capture();
+  video.dispatchEvent(new Event('emptied'));await controller.restore(snapshot);assert.equal(video.textTracks.length,3);assert.equal(controller.selected.id,'external:one');assert.equal(video.textTracks[2].cues[0].startTime,1.5);assert.equal(video.textTracks[2].cues[0].line,15);controller.dispose();
+});
+
+test('stable local external preferences store labels rather than capabilities and resolve a fresh ID next time',async()=>{
+  const cache=new Map(),store={get:(key,fallback)=>cache.get(key)||fallback,set:(key,value)=>cache.set(key,value)},loaded=[];
+  const {controller}=fixture({store,loadSubtitle:async id=>{loaded.push(id);return body;}});controller.updateMetadata({subtitles:[{id:'external:OLD_EPHEMERAL_ID',kind:'external',label:'Movie.zh.srt',language:'zh'}]});await controller.selectExternal('external:OLD_EPHEMERAL_ID');
+  assert.equal(JSON.stringify([...cache.values()]).includes('OLD_EPHEMERAL_ID'),false);
+  controller.setSource('accountHash:movie:1',{subtitles:[{id:'external:NEW_EPHEMERAL_ID',kind:'external',label:'Movie.zh.srt',language:'zh'}]});await controller.applyPreferences({});assert.deepEqual(loaded,['external:OLD_EPHEMERAL_ID','external:NEW_EPHEMERAL_ID']);assert.equal(controller.selected.id,'external:NEW_EPHEMERAL_ID');controller.dispose();
+});
+
+test('background preferences wait for runtime tracks then retry metadata/addtrack without manufacturing NAS tracks',async()=>{
+  const {video,controller}=fixture();video.audioTracks.items=[];video.audioTracks.sync();video.textTracks.items=[];video.textTracks.sync();
+  const pending=await controller.applyPreferences({audio:{label:'Chinese',language:'zho',index:1,count:2},subtitle:{selection:{kind:'native',language:'chi',label:'Chinese',index:1,count:2},offset:.1,size:125}});assert.deepEqual(pending.pending,['audio','text']);
+  video.audioTracks.add({label:'English',language:'en',enabled:true});video.textTracks.add(new TextTrack('English','en'));video.audioTracks.add({label:'Chinese',language:'zh',enabled:false});video.textTracks.add(new TextTrack('Chinese','zh'));video.dispatchEvent(new Event('loadedmetadata'));await controller.pendingRestore.running;
+  assert.equal(video.audioTracks[1].enabled,true);assert.equal(video.textTracks[1].mode,'showing');assert.equal(controller.offset,.1);assert.equal(controller.style.size,125);controller.dispose();
+});
+
+test('a newer manual audio/subtitle/offset/style choice wins over pending and subsequently received background preferences',async()=>{
+  const {video,controller}=fixture();video.audioTracks.items.splice(1);video.audioTracks.sync();video.textTracks.items.splice(1);video.textTracks.sync();
+  await controller.applyPreferences({audio:{label:'Chinese',language:'zh'},subtitle:{selection:{kind:'native',label:'Chinese',language:'zh'},offset:.5,size:125}});
+  controller.selectAudio(controller.audioOptions()[0].id);controller.off();controller.setOffset(.25);controller.setStyle({size:150});
+  video.audioTracks.add({label:'Chinese',language:'zh',enabled:false});video.textTracks.add(new TextTrack('Chinese','zh'));video.dispatchEvent(new Event('loadedmetadata'));
+  await controller.applyPreferences({audio:{language:'zh'},subtitle:{selection:{kind:'native',language:'zh'},offset:.8,size:75}});
+  assert.equal(video.audioTracks[0].enabled,true);assert.equal(video.textTracks[1].mode,'disabled');assert.equal(controller.selected.kind,'off');assert.equal(controller.offset,.25);assert.equal(controller.style.size,150);controller.dispose();
+});
+
+test('late external preference fetch obeys isCurrent and never renders into a new source or after manual off',async()=>{
+  let release;const pending=new Promise(r=>release=r);let current=true;const {video,controller}=fixture({loadSubtitle:async()=>pending});const metadata={subtitles:[{id:'external:one',kind:'external',label:'Movie.srt',language:'en'}]};
+  const result=controller.applyPreferences({subtitle:{selection:{kind:'external',label:'Movie.srt'}}},{metadata,isCurrent:()=>current});current=false;release(body);assert.deepEqual(await result,{cancelled:true});assert.equal(video.textTracks.length,2);
+  controller.setSource('accountHash:movie:1',metadata);let releaseAgain;controller.loadSubtitle=()=>new Promise(r=>releaseAgain=r);const retry=controller.applyPreferences({subtitle:{selection:{kind:'external',label:'Movie.srt'}}});controller.off();releaseAgain(body);await retry;assert.equal(controller.selected.kind,'off');assert.equal(video.textTracks.length,2);controller.dispose();
+});
+
+test('capture restoration respects late manual revisions and cannot cross account/item scopes',async()=>{
+  const {video,controller}=fixture();controller.selectAudio(controller.audioOptions()[1].id);controller.selectText(controller.textOptions()[1].id);const snapshot=controller.capture();video.dispatchEvent(new Event('emptied'));controller.selectAudio(controller.audioOptions()[0].id);controller.off();await controller.restore(snapshot);assert.equal(video.audioTracks[0].enabled,true);assert.equal(controller.selected.kind,'off');
+  controller.setSource('otherAccount:movie:1');assert.deepEqual(await controller.restore(snapshot),{cancelled:true});controller.dispose();
+});
+
+test('server preference fields override scoped local fallbacks without leaking preference state across accounts',async()=>{
+  const cache=new Map(),store={get:(key,fallback)=>cache.get(key)||fallback,set:(key,value)=>cache.set(key,value)};const {video,controller}=fixture({store});controller.setRate(.75);controller.setFit('cover');controller.setOffset(.25);controller.setStyle({color:'#FFFF00',size:150});
+  controller.setSource('accountHash:movie:1');await controller.applyPreferences({rate:1.25,subtitle:{offset:.1,size:125}});assert.equal(video.playbackRate,1.25);assert.equal(video.style.objectFit,'cover');assert.equal(controller.offset,.1);assert.equal(controller.style.size,125);assert.equal(controller.style.color,'#FFFF00');
+  controller.setSource('otherAccount:movie:1');await controller.applyPreferences({rate:1,fit:'contain',subtitle:{offset:0,size:100,color:'#FFFFFF'}});assert.equal(video.playbackRate,1);assert.equal(video.style.objectFit,'contain');assert.equal(controller.style.color,'#FFFFFF');controller.dispose();
+});
+
+test('invalid remembered indexes and unmet languages remain pending, never enabling a NAS PID or unrelated fallback',async()=>{
+  const {video,controller}=fixture();const result=await controller.applyPreferences({audio:{index:4352,count:2},subtitle:{selection:{kind:'native',language:'ja',index:0,count:99}}});assert.deepEqual(result.pending,['audio','text']);assert.equal(video.audioTracks[0].enabled,true);assert.equal(video.textTracks[0].mode,'disabled');controller.dispose();
+});
+
+test('native preferences retry an initially unavailable setter only when a later metadata event arrives',async()=>{
+  const {video,controller}=fixture();let ready=false,enabled=false;Object.defineProperty(video.audioTracks[1],'enabled',{get:()=>enabled,set:value=>{if(!ready)throw new Error('decoder not ready');enabled=value;}});
+  const result=await controller.applyPreferences({audio:{label:'Chinese',language:'zh'}});assert.deepEqual(result.pending,['audio']);assert.equal(enabled,false);ready=true;video.dispatchEvent(new Event('loadedmetadata'));await controller.pendingRestore.running;assert.equal(enabled,true);assert.equal(controller.pendingRestore.warnings.length,0);controller.dispose();
+});
+
+test('an asynchronous ASS restore destroys its new renderer if the source gate changes before initialization finishes',async()=>{
+  const slots=[],renderers=[];let current=true;const {video,controller}=fixture({assContainer:{appendChild:node=>slots.push(node)},loadAss:async()=>'[Script Info]\n[Events]\n',createAssRenderer:async()=>{const renderer={show(){this.shown=true;},destroy(){this.destroyed=true;}};renderers.push(renderer);return renderer;}});
+  controller.updateMetadata({subtitles:[{id:'external:ass',kind:'external',label:'Movie.ass',codec:'ass'}]});await controller.selectAss('external:ass');const captured=controller.capture();video.dispatchEvent(new Event('emptied'));
+  let release,started;const waiting=new Promise(r=>release=r),startedGate=new Promise(r=>started=r);controller.createAssRenderer=async()=>{started();return waiting;};const restored=controller.restore(captured,{isCurrent:()=>current});await startedGate;current=false;const renderer={show(){this.shown=true;},destroy(){this.destroyed=true;}};release(renderer);assert.deepEqual(await restored,{cancelled:true});assert.equal(renderer.destroyed,true);assert.equal(renderer.shown,undefined);assert.equal(slots.at(-1).removed,true);controller.dispose();
+});

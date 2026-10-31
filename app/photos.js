@@ -1,9 +1,25 @@
 (() => {
   'use strict';
-  window.createPhotoGallery = ({ root, api, asset, esc, header, nav, bind, focus, toast, store, exit, nativePhotoViewer }) => {
+  window.createPhotoGallery = ({ root, api, asset, esc, header, nav, bind, focus, toast, store, exit, nativePhotoViewer, uhdPipeline, decodeImage, getConnection, videoPlane }) => {
     const $ = selector => root.querySelector(selector);
+    const captureConnection = () => { if (getConnection) return { ...getConnection() }; const url = new URL(asset('/api/status'), document.baseURI); return { server: url.origin, token: url.searchParams.get('client') || '' }; };
+    let planeSerial = 0;
+    function acquirePlane(job) {
+      const supplied = typeof videoPlane === 'function' ? videoPlane() : videoPlane;
+      if (videoPlane && !supplied) throw new Error('当前视频仍在使用中');
+      const clip = supplied || document.createElement('video');
+      if (supplied && (!clip.paused || clip.getAttribute('src') || clip.src || clip.querySelector('source[src]'))) throw new Error('当前视频仍在使用中');
+      job.borrowedPlane = Boolean(supplied); job.planeLease = 'photo-' + (++planeSerial);
+      job.savedPlane = { style: clip.getAttribute('style'), muted: clip.muted, volume: clip.volume, preload: clip.preload, loop: clip.loop, controls: clip.controls, autoplay: clip.autoplay, playsInline: clip.playsInline };
+      clip.dataset.cloudframePhotoLease = job.planeLease;
+      if (!supplied) { clip.id = 'photo-uhd-video'; document.body.insertBefore(clip, document.body.firstChild); }
+      clip.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;display:block;object-fit:contain;transform:none;z-index:0;pointer-events:none;background:#000';
+      clip.muted = true; clip.playsInline = true; clip.preload = 'auto'; clip.loop = false; clip.controls = false; clip.autoplay = false;
+      return clip;
+    }
     const G = { active: false, tab: 'timeline', album: null, albumPage: 0, group: null, groupPage: 0, category: 'figure', search: '', searchType: '8', offset: 0, data: null, filter: 'all', sort: 'date', viewer: false, index: 0, playing: false, interval: Number(store.get('photoInterval', '5')), rotation: 0, zoom: false, controls: true, generation: 0, imageGeneration: 0, loading: false, infoOpen: false, source: 'preview' };
-    let slideTimer, hideTimer, preload, soundtrack, musicGeneration = 0, audioGeneration = 0;
+    let slideTimer, hideTimer, preload, soundtrack, softwareMusic, musicTask, heifDecoder, musicGeneration = 0, audioGeneration = 0;
+    Object.assign(G, { uhdPreferred: store.get('photoUhd', '0') === '1', uhdJob: null, uhdActive: false, uhdNotices: new Set() });
     Object.assign(G, { folder: null, folderBack: [], folderSort: 'name', folderOrder: 'asc', memory: null, mode: store.get('photoMode', 'sequential'), display: store.get('photoDisplay', 'fit'), videoRate: Number(store.get('photoVideoRate', '1')), previewOverride: null, musicEnabled: store.get('photoMusicOn', '0') === '1', musicIndex: Number(store.get('photoMusicIndex', '0')) || 0, musicTrack: null, musicItems: null, musicLoading: null, musicPosition: 0, musicError: false, dialogType: null, resumeAfterDialog: false });
     if (![2, 3, 5, 10, 15].includes(G.interval)) G.interval = 5;
     if (!['sequential', 'random', 'loop'].includes(G.mode)) G.mode = 'sequential';
@@ -15,7 +31,12 @@
     const bytes = value => value > 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GB` : value > 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : value ? `${Math.ceil(value / 1024)} KB` : '';
     const categoryNames = { figure: '人物', city: '地点', object: '事物', pet: '宠物', custom: '自定义分类' };
     const thumb = (path, name) => path ? `<img src="${esc(asset(path))}" alt="${esc(name)}" loading="lazy">` : '<span class="photo-placeholder">▧</span>';
+    const hasSoftwareMusic = () => typeof window.createPhotoMusic === 'function';
     function stopMusic() {
+      if (softwareMusic) {
+        const state = softwareMusic.state(); if (state.src && Number.isFinite(state.currentTime)) G.musicPosition = state.currentTime;
+        ++audioGeneration; musicTask = null; softwareMusic.pause().catch(() => {});
+      }
       if (!soundtrack) return;
       if (soundtrack.getAttribute('src')) ++audioGeneration;
       try { if (soundtrack.getAttribute('src') && Number.isFinite(soundtrack.currentTime)) G.musicPosition = soundtrack.currentTime; } catch {}
@@ -34,8 +55,19 @@
       return G.musicLoading;
     }
     function syncMusic() {
-      if (!G.active || !G.viewer || !G.ready || !G.playing || document.hidden || $('#photo-clip') || !G.musicEnabled || G.musicError) { stopMusic(); return; }
+      if (!G.active || !G.viewer || !G.ready || !G.playing || document.hidden || $('#photo-clip') || (G.uhdJob || G.uhdActive) && !hasSoftwareMusic() || !G.musicEnabled || G.musicError) { stopMusic(); return; }
       if (!G.musicTrack) { if (G.musicItems?.length === 0) return; musicList().then(items => { if (items?.length) syncMusic(); }).catch(() => { G.musicError = true; toast('背景音乐暂时无法读取，照片继续播放。'); }); return; }
+      if (hasSoftwareMusic()) {
+        if (soundtrack) { stopMusic(); soundtrack = null; }
+        const url = asset(G.musicTrack.stream);
+        softwareMusic ||= window.createPhotoMusic({ getGateway: () => new URL(asset('/')).origin });
+        const state = softwareMusic.state(); if (musicTask || state.src === url && !state.paused) return;
+        const generation = audioGeneration;
+        const operation = state.src === url && state.loaded ? softwareMusic.resume() : softwareMusic.play(url, { position: G.musicPosition, loop: true });
+        const task = Promise.resolve(operation).then(value => { if (G.active && generation === audioGeneration && value.contextState !== 'running') toast('背景音乐等待音频上下文恢复，可暂停后重新播放'); }).catch(error => {
+          if (error.name !== 'AbortError' && G.active && generation === audioGeneration) { G.musicError = true; stopMusic(); toast('背景音乐暂时无法解码，照片继续播放。'); }
+        }).finally(() => { if (musicTask === task) musicTask = null; }); musicTask = task; return;
+      }
       if (!soundtrack) { soundtrack = new Audio(); soundtrack.preload = 'none'; soundtrack.loop = true; }
       const url = asset(G.musicTrack.stream);
       if (soundtrack.getAttribute('src') !== url) {
@@ -48,15 +80,125 @@
       soundtrack.onerror = failure;
       if (soundtrack.paused) soundtrack.play().catch(e => { if (e.name !== 'AbortError') failure(); });
     }
+    function closeUhdRemote(job) {
+      if (!job?.remote || job.remoteClosed) return; job.remoteClosed = true;
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 5000);
+      fetch(job.closeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: job.remote.id }), signal: controller.signal, keepalive: true }).catch(() => {}).finally(() => clearTimeout(timer));
+    }
+    function releaseUhdJob(job) {
+      if (!job) return; job.controller.abort(); clearTimeout(job.frameTimer); clearTimeout(job.presentationTimer);
+      try { if (job.frameCallback != null) job.video?.cancelVideoFrameCallback?.(job.frameCallback); } catch {}
+      if (job.video) {
+        const clip = job.video, ownsLease = clip.dataset.cloudframePhotoLease === job.planeLease;
+        const intent = clip.getAttribute('src') || clip.querySelector('source[src]')?.src || clip.src;
+        const ownsSource = !job.mediaUrl || (intent ? intent === job.mediaUrl : clip.currentSrc === job.mediaUrl);
+        if (ownsLease && ownsSource) {
+          clip.onloadeddata = clip.onerror = null; try { clip.pause(); clip.removeAttribute('src'); clip.load(); } catch {}
+          if (job.borrowedPlane) { const saved = job.savedPlane; if (saved.style == null) clip.removeAttribute('style'); else clip.setAttribute('style', saved.style); for (const key of ['muted','volume','preload','loop','controls','autoplay','playsInline']) clip[key] = saved[key]; }
+          else clip.remove();
+          delete clip.dataset.cloudframePhotoLease;
+        }
+        job.video = null;
+      }
+      closeUhdRemote(job);
+    }
+    function stopUhd(restore = true) {
+      const job = G.uhdJob; G.uhdJob = null; G.uhdActive = false;
+      document.body.classList.remove('photo-uhd-presenting'); $('.photo-viewer')?.classList.remove('photo-uhd-presenting');
+      if (job) { releaseUhdJob(job); heifDecoder?.cancel?.(); }
+      if (restore && $('#photo-full')) $('#photo-full').style.visibility = '';
+      $('#photo-uhd-status')?.remove(); if ($('#photo-uhd')) $('#photo-uhd').textContent = '4K 视频显示';
+      for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = false;
+    }
+    function uhdStatus(text) {
+      let status = $('#photo-uhd-status');
+      if (!status) { status = document.createElement('p'); status.id = 'photo-uhd-status'; status.className = 'photo-uhd-status photo-overlay'; $('.photo-viewer')?.appendChild(status); }
+      status.textContent = text;
+    }
+    function heifHook() {
+      if (typeof decodeImage === 'function') return decodeImage;
+      if (typeof window.createPhotoHeifDecoder !== 'function') return undefined;
+      return (blob, options) => { heifDecoder ||= window.createPhotoHeifDecoder(); return heifDecoder.decode(blob, options); };
+    }
+    async function startUhd(p, automatic = false) {
+      if (!G.active || !G.viewer || !p.original || p.kind !== 'image' || $('#photo-clip') || document.hidden) return;
+      const pipeline = uhdPipeline || window.PhotoUhdPipeline;
+      if (!pipeline?.encodeOriginal) { if (!automatic) toast('4K 编码模块尚未加载'); return; }
+      stopUhd(); clearTimeout(slideTimer); if (!hasSoftwareMusic()) stopMusic();
+      G.rotation = 0; G.zoom = false; transform();
+      let originalURL;
+      try { originalURL = new URL(asset(p.original)); } catch { uhdStatus('原图链接不可用，继续使用照片显示'); schedule(); syncMusic(); return; }
+      const client = originalURL.searchParams.get('client');
+      const uploadURL = new URL('/api/photos/uhd', originalURL); uploadURL.searchParams.set('asset', originalURL.pathname.split('/').pop()); uploadURL.searchParams.set('client', client);
+      const closeURL = new URL('/api/photos/uhd/close', originalURL); closeURL.searchParams.set('client', client);
+      const job = { controller: new AbortController(), generation: G.imageGeneration, remote: null, video: null, closeUrl: closeURL.href };
+      G.uhdJob = job;
+      const current = () => G.active && G.viewer && G.uhdJob === job && G.imageGeneration === job.generation && !job.controller.signal.aborted && !document.hidden;
+      if ($('#photo-uhd')) $('#photo-uhd').textContent = '取消 4K 准备';
+      for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = true;
+      uhdStatus('正在从原图生成 4K 视频…' + (G.musicEnabled && !hasSoftwareMusic() ? ' 背景音乐已暂停' : ''));
+      try {
+        let width = p.width, height = p.height;
+        if ((!width || !height) && p.info) { const detail = await api(p.info, undefined, job.controller.signal); width = detail.item?.width; height = detail.item?.height; }
+        if (!current()) return;
+        const encoded = await pipeline.encodeOriginal(originalURL.href, { expectedWidth: width, expectedHeight: height, width: 3840, height: 2160, durationMs: 15000, fit: G.display === 'fill' ? 'cover' : 'contain', hardwareAcceleration: 'no-preference', signal: job.controller.signal, decodeImage: heifHook() });
+        if (!current()) return;
+        const uploading = new AbortController(), timeout = setTimeout(() => uploading.abort(), 30000);
+        let reply;
+        // Finish this bounded local upload even if the photo changes, so a late
+        // opaque ID can be explicitly closed instead of orphaning a RAM slot.
+        try { const uploaded = await fetch(uploadURL.href, { method: 'POST', headers: { 'Content-Type': 'video/mp4' }, body: encoded.blob, signal: uploading.signal }); reply = await uploaded.json(); if (!uploaded.ok) throw Object.assign(new Error('UHD upload failed'), { code: reply.code }); }
+        finally { clearTimeout(timeout); }
+        if (!/^[a-f0-9]{40}$/.test(reply?.id || '') || typeof reply.url !== 'string') throw new Error('Invalid UHD response');
+        job.remote = reply; if (!current()) { closeUhdRemote(job); return; }
+        const mediaURL = new URL(reply.url, originalURL); if (mediaURL.origin !== originalURL.origin || !/^\/photo-uhd\/[a-f0-9]{40}$/.test(mediaURL.pathname)) throw new Error('Invalid UHD URL'); mediaURL.searchParams.set('client', client); const url = mediaURL.href;
+        const clip = acquirePlane(job); job.video = clip; job.mediaUrl = url;
+        await new Promise((resolve, reject) => {
+          const failed = () => reject(Object.assign(new Error('UHD video failed'), { code: 'VIDEO_FORMAT_UNSUPPORTED' }));
+          let loaded = false, started = false, scheduled = false;
+          const presented = () => { clearTimeout(job.frameTimer); clearTimeout(job.presentationTimer); resolve(); };
+          const ready = () => {
+            if (!loaded || !started || scheduled) return; scheduled = true;
+            try { if (typeof clip.requestVideoFrameCallback === 'function') job.frameCallback = clip.requestVideoFrameCallback(presented); } catch {}
+            // Native TV pipelines may not implement the frame callback even
+            // when the property exists. Require loadeddata + fulfilled play,
+            // then allow a short presentation interval before pausing.
+            job.presentationTimer = setTimeout(presented, 250);
+          };
+          job.frameTimer = setTimeout(failed, 15000); job.controller.signal.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true });
+          clip.onerror = failed; clip.onloadeddata = () => { if (clip.videoWidth !== 3840 || clip.videoHeight !== 2160) { failed(); return; } loaded = true; ready(); };
+          clip.src = url; clip.load(); clip.play().then(() => { started = true; ready(); }).catch(error => { if (error.name !== 'AbortError') failed(); });
+        });
+        if (!current()) { releaseUhdJob(job); return; }
+        clip.pause(); clip.onloadeddata = null; clip.onerror = () => { if (G.uhdJob === job) { stopUhd(); uhdStatus('4K 视频暂不可用，已恢复照片显示'); if (G.playing) { schedule(); syncMusic(); } } };
+        G.uhdActive = true; if ($('#photo-full')) $('#photo-full').style.visibility = 'hidden';
+        document.body.classList.add('photo-uhd-presenting'); $('.photo-viewer')?.classList.add('photo-uhd-presenting');
+        if ($('#photo-view-error')) $('#photo-view-error').replaceChildren();
+        if ($('#photo-view-loading')) $('#photo-view-loading').style.display = 'none';
+        for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = true;
+        if ($('#photo-uhd')) $('#photo-uhd').textContent = '返回照片显示';
+        uhdStatus('4K 视频显示 · 有损视频编码，颜色可能与原图不同' + (p.format === 'gif' ? ' · 动图使用静态首帧' : '') + (encoded.report?.sourceUpscaled ? ' · 原图较小，放大不会增加细节' : encoded.report?.intermediateUpscaled ? ' · 画面经过放大，不会增加细节' : '') + (G.musicEnabled ? hasSoftwareMusic() ? ' · 背景音乐启用' : ' · 背景音乐已暂停' : ''));
+        G.ready = true; schedule(); syncMusic(); showControls();
+      } catch (error) {
+        if (current()) {
+          stopUhd();
+          const text = error.code === 'IMAGE_DECODE_UNSUPPORTED' ? '此原图格式暂不能生成 4K 视频，可使用照片预览或系统查看' : '4K 视频准备失败，已恢复照片显示';
+          uhdStatus(text); const key = p.format + ':' + (error.code || error.name);
+          if (!automatic || !G.uhdNotices.has(key)) toast(text); G.uhdNotices.add(key);
+          schedule(); syncMusic();
+        }
+      } finally { clearTimeout(job.frameTimer); if (!current()) releaseUhdJob(job); }
+    }
     function stopMedia() {
       clearTimeout(slideTimer); clearTimeout(hideTimer); ++G.imageGeneration;
+      stopUhd();
       cancelVideoCandidate(false);
-      if (G.videoSession) { const id = G.videoSession.id; G.videoSession = null; api('/api/photos/video/close', { id }).catch(() => {}); }
+      if (G.videoSession) { const { id, connection } = G.videoSession; G.videoSession = null; api('/api/photos/video/close', { id }, undefined, connection).catch(() => {}); }
       const clip = $('#photo-clip');
       if (clip) { clip.onplay = clip.onpause = clip.onloadeddata = clip.onended = clip.onerror = null; clip.pause(); clip.removeAttribute('src'); clip.load(); }
       if (preload) { preload.onload = preload.onerror = null; preload.src = ''; preload = null; }
     }
-    function leave() { G.active = false; G.playing = false; G.viewer = false; G.infoOpen = false; G.previewOverride = null; ++G.generation; ++musicGeneration; G.musicLoading = null; stopMedia(); stopMusic(); }
+    function leave() { G.active = false; G.playing = false; G.viewer = false; G.infoOpen = false; G.previewOverride = null; ++G.generation; ++musicGeneration; G.musicLoading = null; stopMedia(); stopMusic(); softwareMusic?.dispose().catch(() => {}); softwareMusic = null; heifDecoder?.dispose?.(); heifDecoder = null; }
     function query(offset) {
       const params = new URLSearchParams({ offset, filter: G.filter, sort: G.sort });
       if (G.album) { params.set('album', G.album.id); params.set('type', G.album.type); }
@@ -140,7 +282,7 @@
     }
     function schedule() {
       clearTimeout(slideTimer);
-      if (G.ready && G.playing && G.viewer && G.active && !document.hidden && !$('#photo-clip')) slideTimer = setTimeout(() => step(1, true), G.interval * 1000);
+      if (G.ready && G.playing && G.viewer && G.active && !document.hidden && !$('#photo-clip') && (!G.uhdJob || G.uhdActive)) slideTimer = setTimeout(() => step(1, true), G.interval * 1000);
     }
     function setSlideshow(playing) {
       G.playing = playing;
@@ -174,8 +316,12 @@
     function applyDisplay() { ($('#photo-full') || $('#photo-clip'))?.classList.toggle('photo-fill', G.display === 'fill'); }
     function cancelVideoCandidate(restore = true) {
       const pending = G.videoPending; if (!pending) return;
-      G.videoPending = null; pending.cleanup?.(); if (restore) pending.restore?.();
-      api('/api/photos/video/discard', { id: pending.id, request: pending.request, candidate: pending.candidate }).catch(() => {});
+      G.videoPending = null; pending.cleanup?.();
+      // A commit already sent has an unknown outcome until active reconciles
+      // it. Closing the viewer separately closes its whole owned session.
+      if (pending.committing) return;
+      if (restore) pending.restore?.();
+      api('/api/photos/video/discard', { id: pending.id, request: pending.request, candidate: pending.candidate }, undefined, pending.connection).catch(() => {});
     }
     function closeInfo({ keepCandidate = false } = {}) {
       const resume = G.resumeAfterDialog, resumeClip = G.dialogResumeClip, returnFocus = G.dialogReturnFocus;
@@ -183,6 +329,7 @@
       G.infoOpen = false; G.dialogType = null; G.resumeAfterDialog = false; G.dialogResumeClip = false; $('#photo-info-dialog')?.remove();
       focus($('#' + (returnFocus || 'photo-info'))); showControls();
       if (G.active && G.viewer && !document.hidden) { if (resume) setSlideshow(true); else if (resumeClip && $('#photo-clip')) $('#photo-clip').play().catch(() => {}); }
+      if (G.uhdNeedsRerender && G.uhdPreferred && G.viewer) { G.uhdNeedsRerender = false; startUhd(G.previewOverride || G.data.items[G.index], true); }
     }
     function settingsLabel(key) {
       if (key === 'interval') return `时长：${G.interval} 秒`;
@@ -198,6 +345,7 @@
       const button = $(`[data-photo-setting="${key}"]`); if (button) button.textContent = settingsLabel(key);
       if ($('#photo-interval')) $('#photo-interval').textContent = `间隔 ${G.interval} 秒`;
       applyDisplay(); schedule();
+      if (key === 'display' && G.uhdJob) { G.uhdNeedsRerender = true; stopUhd(); }
     }
     async function chooseMusic() {
       const content = $('#photo-music-choices'), generation = G.imageGeneration;
@@ -208,7 +356,7 @@
         if (!G.infoOpen || G.dialogType !== 'settings' || generation !== G.imageGeneration || !tracks) return;
         content.innerHTML = `<button id="photo-music-off">关闭背景音乐</button>${tracks.map((track, index) => `<button data-photo-track="${index}">${esc(track.name)}${G.musicEnabled && G.musicTrack?.id === track.id ? ' ✓' : ''}</button>`).join('')}${tracks.length ? '' : '<p>NAS 当前没有可用的幻灯片音乐</p>'}`;
         const select = index => {
-          stopMusic(); G.musicPosition = 0; G.musicError = false; G.musicEnabled = index >= 0; G.musicIndex = Math.max(0, index); G.musicTrack = index >= 0 ? tracks[index] : null;
+          stopMusic(); softwareMusic?.stop().catch(() => {}); G.musicPosition = 0; G.musicError = false; G.musicEnabled = index >= 0; G.musicIndex = Math.max(0, index); G.musicTrack = index >= 0 ? tracks[index] : null;
           store.set('photoMusicOn', G.musicEnabled ? '1' : '0'); store.set('photoMusicIndex', String(G.musicIndex));
           content.innerHTML = ''; $('#photo-music-setting').textContent = settingsLabel('music'); focus($('#photo-music-setting'));
         };
@@ -233,36 +381,41 @@
       dialog.innerHTML = '<div class="photo-info-panel"><h2>照片信息</h2><div id="photo-info-content">正在读取…</div><button id="photo-info-close">关闭</button></div>'; root.appendChild(dialog); $('#photo-info-close').onclick = closeInfo; focus($('#photo-info-close'));
       try {
         const data = p.info ? await api(p.info) : { item: p, metadata: {} };
-        if (!G.active || !G.viewer || !G.infoOpen || imageGeneration !== G.imageGeneration) return;
+        if (!G.active || !G.viewer || !G.infoOpen || G.dialogType !== 'info' || $('#photo-info-dialog') !== dialog || imageGeneration !== G.imageGeneration) return;
         const item = data.item || p, m = data.metadata || {};
         const rows = [['名称', item.name], ['文件格式', item.format?.toUpperCase()], ['原始尺寸', item.width && item.height ? `${item.width} × ${item.height}` : ''], ['文件大小', bytes(item.size)], ['拍摄时间', m.created || date(item.date)], ['修改时间', m.modified], ['相机', m.camera], ['镜头', m.lens], ['焦距', m.focalLength], ['光圈', m.aperture], ['曝光', m.exposure], ['ISO', m.iso], ['地点', m.location]].filter(([, value]) => value);
         $('#photo-info-content').innerHTML = `<dl>${rows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
-      } catch (e) { if (G.infoOpen && imageGeneration === G.imageGeneration && $('#photo-info-content')) $('#photo-info-content').textContent = e.message; }
+      } catch (e) { if (G.infoOpen && G.dialogType === 'info' && $('#photo-info-dialog') === dialog && imageGeneration === G.imageGeneration && $('#photo-info-content')) $('#photo-info-content').textContent = e.message; }
     }
     async function openQuality(p) {
       const clip = $('#photo-clip'); if (!clip || G.infoOpen || !G.viewer) return;
-      const generation = G.imageGeneration, resume = G.playing, resumeClip = !clip.paused;
+      const generation = G.imageGeneration, resume = G.playing, resumeClip = !clip.paused, connection = G.videoSession?.connection || captureConnection();
       setSlideshow(false); G.infoOpen = true; G.dialogType = 'quality'; G.resumeAfterDialog = resume; G.dialogResumeClip = resumeClip; G.dialogReturnFocus = 'photo-video-quality';
       const dialog = document.createElement('section'); dialog.id = 'photo-info-dialog'; dialog.className = 'photo-info-dialog'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', '相册视频画质');
       dialog.innerHTML = '<div class="photo-info-panel"><h2>视频画质</h2><div id="photo-info-content" class="photo-settings-list">正在读取 NAS 可用画质…</div><button id="photo-info-close">返回</button></div>'; root.appendChild(dialog); $('#photo-info-close').onclick = closeInfo; focus($('#photo-info-close'));
-      const current = () => G.active && G.viewer && G.infoOpen && G.dialogType === 'quality' && generation === G.imageGeneration;
+      const current = () => G.active && G.viewer && G.infoOpen && G.dialogType === 'quality' && $('#photo-info-dialog') === dialog && generation === G.imageGeneration;
       try {
         if (!G.videoSession) {
-          const started = await api('/api/photos/video/start', { asset: p.stream.slice(p.stream.lastIndexOf('/') + 1) });
-          if (!current()) { if (started.id) api('/api/photos/video/close', { id: started.id }).catch(() => {}); return; }
-          G.videoSession = started;
+          const started = await api('/api/photos/video/start', { asset: p.stream.slice(p.stream.lastIndexOf('/') + 1) }, undefined, connection);
+          if (!current()) { if (started.id) api('/api/photos/video/close', { id: started.id }, undefined, connection).catch(() => {}); return; }
+          G.videoSession = { ...started, connection };
         }
         if (!current()) return;
         const session = G.videoSession, qualities = session.options?.qualities || [];
+        if (session.unconfirmed) {
+          const active = await api('/api/photos/video/active?id=' + encodeURIComponent(session.id), undefined, undefined, session.connection).catch(() => null);
+          if (!current() || G.videoSession !== session) return;
+          if (active && typeof active.selected === 'string') { session.selected = active.selected; session.unconfirmed = false; if ($('#photo-video-quality')) $('#photo-video-quality').textContent = '画质：' + (active.quality?.label || active.selected); }
+        }
         $('#photo-info-content').innerHTML = qualities.map((quality, i) => `<button data-photo-quality="${i}">${esc(quality.label)}${quality.resolution ? ` · ${esc(quality.resolution)}` : ''}${quality.id === (session.selected || 'original') ? ' ✓' : ''}</button>`).join('') || '<p>NAS 当前没有返回可用画质</p>';
         dialog.querySelectorAll('[data-photo-quality]').forEach(button => button.onclick = async () => {
           const quality = qualities[Number(button.dataset.photoQuality)]; if (!quality || session.busy) return;
           session.busy = true; dialog.querySelectorAll('[data-photo-quality]').forEach(item => item.disabled = true);
           const position = clip.currentTime, request = 'quality-' + (G.videoRequestCounter = (G.videoRequestCounter || 0) + 1);
-          const pending = G.videoPending = { id: session.id, request, candidate: null };
+          const pending = G.videoPending = { id: session.id, request, candidate: null, connection: session.connection };
           try {
-            const result = await api('/api/photos/video/quality', { id: session.id, quality: quality.id, request });
-            if (!current() || G.videoSession !== session || G.videoPending !== pending) { api('/api/photos/video/discard', { id: session.id, candidate: result.candidate, request }).catch(() => {}); return; }
+            const result = await api('/api/photos/video/quality', { id: session.id, quality: quality.id, request }, undefined, session.connection);
+            if (!current() || G.videoSession !== session || G.videoPending !== pending) { api('/api/photos/video/discard', { id: session.id, candidate: result.candidate, request }, undefined, session.connection).catch(() => {}); return; }
             pending.candidate = result.candidate;
             const oldUrl = clip.src, oldError = clip.onerror, qualityButton = $('#photo-video-quality'); qualityButton.disabled = true;
             let frameTimer;
@@ -272,17 +425,26 @@
               clip.pause(); clip.removeAttribute('src'); clip.load(); clip.addEventListener('loadedmetadata', restorePosition, { once: true }); clip.src = oldUrl; clip.load();
               if (resume || resumeClip) clip.play().catch(() => {});
             };
-            const failed = () => { if (G.videoPending !== pending) return; cancelVideoCandidate(); toast('这个画质未能开始播放，已保留之前的画质'); };
+            const failed = () => { if (G.videoPending !== pending || pending.committing) return; cancelVideoCandidate(); toast('这个画质未能开始播放，已保留之前的画质'); };
             const accepted = async () => {
               if (G.videoPending !== pending || generation !== G.imageGeneration) return;
-              clearTimeout(frameTimer);
+              clearTimeout(frameTimer); pending.committing = true;
               try {
-                const result = await api('/api/photos/video/commit', { id: session.id, candidate: pending.candidate });
+                let result;
+                try { result = await api('/api/photos/video/commit', { id: session.id, candidate: pending.candidate }, undefined, session.connection); }
+                catch (commitError) {
+                  if (G.videoPending !== pending || generation !== G.imageGeneration || G.videoSession !== session) return;
+                  const actual = await api('/api/photos/video/active?id=' + encodeURIComponent(session.id), undefined, undefined, session.connection).catch(() => null);
+                  if (actual?.candidate === pending.candidate) result = actual;
+                  else if (actual) throw commitError;
+                  else { pending.cleanup(); G.videoPending = null; session.selected = 'unconfirmed'; session.unconfirmed = true; qualityButton.textContent = '画质：待确认'; toast('画质提交结果尚未确认，可重新打开画质菜单核对'); return; }
+                }
                 if (G.videoPending !== pending || generation !== G.imageGeneration) return;
-                session.selected = quality.id; qualityButton.textContent = '画质：' + quality.label; pending.cleanup(); G.videoPending = null; if (result.warning) toast(result.warning);
-              } catch { failed(); }
+                session.selected = result.selected || quality.id; qualityButton.textContent = '画质：' + (result.quality?.label || quality.label); pending.cleanup(); G.videoPending = null; if (result.warning) toast(result.warning);
+              } catch { pending.committing = false; failed(); }
+              finally { pending.committing = false; }
             };
-            pending.cleanup = () => { clearTimeout(frameTimer); clip.removeEventListener('loadeddata', accepted); clip.removeEventListener('error', failed); clip.removeEventListener('loadedmetadata', restorePosition); clip.onerror = oldError; qualityButton.disabled = false; };
+            pending.cleanup = () => { clearTimeout(frameTimer); clip.removeEventListener('loadeddata', accepted); clip.removeEventListener('error', failed); clip.removeEventListener('loadedmetadata', restorePosition); clip.onerror = oldError; qualityButton.disabled = false; if (!G.videoPending || G.videoPending === pending) session.busy = false; };
             pending.restore = rollback;
             clip.onerror = null; clip.addEventListener('error', failed, { once: true }); clip.addEventListener('loadeddata', accepted, { once: true }); clip.addEventListener('loadedmetadata', restorePosition, { once: true });
             clip.pause(); clip.removeAttribute('src'); clip.load();
@@ -290,7 +452,7 @@
             // Preload metadata alone need not decode a first frame. Keep one
             // video element, and begin it only if it was playing beforehand.
           } catch (error) { if (G.videoPending === pending) cancelVideoCandidate(); if (current()) { toast(error.message); dialog.querySelectorAll('[data-photo-quality]').forEach(item => item.disabled = false); focus(button); } }
-          finally { session.busy = false; }
+          finally { if (!G.videoPending || G.videoPending.id !== session.id) session.busy = false; }
         });
         focus(dialog.querySelector('[data-photo-quality]') || $('#photo-info-close'));
       } catch (error) { if (current()) $('#photo-info-content').textContent = error.message; }
@@ -319,17 +481,27 @@
         };
       }
       const settingsButton = document.createElement('button'); settingsButton.id = 'photo-settings'; settingsButton.textContent = '幻灯片设置'; settingsButton.onclick = openSettings; $('#photo-info').before(settingsButton);
+      if (!isVideo && p.kind === 'image' && p.original) {
+        const uhdButton = document.createElement('button'); uhdButton.id = 'photo-uhd'; uhdButton.textContent = '4K 视频显示'; $('#photo-info').before(uhdButton);
+        uhdButton.onclick = () => {
+          if (G.uhdJob) { G.uhdPreferred = false; store.set('photoUhd', '0'); stopUhd(); schedule(); syncMusic(); }
+          else { G.uhdPreferred = true; store.set('photoUhd', '1'); startUhd(p); }
+          showControls();
+        };
+      }
       if ($('#photo-original')) $('#photo-original').onclick = () => {
+        G.uhdPreferred = false; store.set('photoUhd', '0'); stopUhd();
         if (isOriginal) return openViewer(index);
         if (p.output?.browserOriginalCandidate === false) { toast(`${p.format?.toUpperCase() || '此格式'} 原图暂不能在当前查看器中显示，请使用预览图。`); showControls(); return; }
         openViewer(index, false, 'original');
       };
       if ($('#photo-motion')) $('#photo-motion').onclick = () => openViewer(index, false, source === 'live' ? 'preview' : 'live');
-      if ($('#photo-native')) $('#photo-native').onclick = () => { setSlideshow(false); Promise.resolve(nativePhotoViewer({ ...p, url: asset(p.original) })).catch(e => toast(e.message)); };
+      if ($('#photo-native')) $('#photo-native').onclick = () => { setSlideshow(false); stopUhd(); Promise.resolve(nativePhotoViewer({ ...p, url: asset(p.original) })).catch(e => toast(e.message)); };
       $('#photo-interval').onclick = () => { changeSetting('interval'); showControls(); };
       const imageGeneration = ++G.imageGeneration;
       const failure = () => {
         if (!G.active || imageGeneration !== G.imageGeneration) return;
+        if (!isVideo && G.uhdActive) { $('#photo-view-loading').style.display = 'none'; $('#photo-view-error').replaceChildren(); return; }
         G.playing = false; stopMusic(); clearTimeout(slideTimer); $('#photo-view-loading').style.display = 'none';
         $('#photo-slideshow').textContent = '播放幻灯片';
         $('#photo-view-error').innerHTML = `<p>${isVideo ? '电视无法播放这个视频，可能是编码不受支持。' : isOriginal ? '原图无法显示，可能是文件格式或尺寸不受电视支持。' : '照片加载失败，请检查 NAS 连接。'}</p>${isOriginal ? '<button id="photo-preview-fallback">使用预览图</button>' : ''}<button id="photo-view-retry">重试</button><button id="photo-error-back">返回列表</button>`;
@@ -357,7 +529,9 @@
         $('#photo-zoom').onclick = () => { G.zoom = !G.zoom; transform(); showControls(); };
         img.onload = () => {
           if (!G.active || imageGeneration !== G.imageGeneration) return;
-          G.ready = true; $('#photo-view-loading').style.display = 'none'; schedule(); syncMusic();
+          G.ready = true; $('#photo-view-loading').style.display = 'none';
+          if (G.uhdPreferred && p.original && !G.uhdJob) startUhd(p, true);
+          schedule(); syncMusic();
           const next = G.data.items[index + 1];
           if (next?.kind === 'image') { preload = new Image(); preload.src = asset(next.view); }
         };
@@ -431,7 +605,7 @@
     document.addEventListener('visibilitychange', () => {
       if (!G.active || !document.hidden) return;
       G.playing = false; clearTimeout(slideTimer); $('#photo-clip')?.pause();
-      stopMusic();
+      stopUhd(); stopMusic();
       if ($('#photo-slideshow')) $('#photo-slideshow').textContent = '播放幻灯片';
     });
     return { open() { G.active = true; return load(); }, leave, back, key, reset() { leave(); G.tab = 'timeline'; G.album = null; G.group = null; G.folder = null; G.folderBack = []; G.memory = null; G.offset = 0; G.data = null; G.search = ''; G.musicTrack = null; G.musicItems = null; G.musicPosition = 0; G.musicError = false; } };

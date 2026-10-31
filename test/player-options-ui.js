@@ -63,6 +63,19 @@ async page => {
   await test('偏好同步失败不会谎称保存或回滚已生效的当前倍速', async () => {
     await boot({ preferencesError: true }); await open('rate'); await click('rate', '1.25'); await page.waitForFunction(() => document.querySelector('.po-message').textContent.includes('未保存')); assert(await page.evaluate(() => document.querySelector('video').playbackRate === 1.25), 'Applied rate rolled back');
   });
+  await test('外挂字幕选择保存安全文件名，不能把本次临时能力ID写成跨播放偏好', async () => {
+    await boot({ tracks: true }); await open('subtitles'); await click('external-subtitle', 'external:known');
+    await page.waitForFunction(() => po.calls.some(c => c.path === '/api/play/preferences' && c.body?.preferences?.subtitle?.selection?.kind === 'external'));
+    const selection = await page.evaluate(() => po.calls.find(c => c.body?.preferences?.subtitle?.selection?.kind === 'external').body.preferences.subtitle.selection);
+    assert(selection.label === '示例.srt' && !('id' in selection), 'External capability persisted instead of safe descriptor');
+  });
+  await test('hydrate换片清理旧在线结果、字幕关闭标记和队列偏好', async () => {
+    await boot({ tracks: true }); await open('mode'); await click('mode', 'loop_single'); await open('subtitles'); await click('subtitle-off');
+    await open('online'); await page.locator('[data-po-search] input').fill('旧电影'); await page.locator('[data-po-search] button').click(); await page.waitForSelector('[data-po-action="online-download"]');
+    await page.evaluate(() => { po.panel.close(); po.play = { id: 'play-two', title: '下一部电影' }; document.querySelector('video').textTracks[0].mode = 'showing'; po.panel.hydrate({ qualities: [{ id: 'original', label: '原画' }], subtitles: [], preferences: { mode: 'sort_list', rate: 1, fit: 'contain', subtitle: { offset: 0, size: 100, color: '#FFFFFF', position: 90, language: '' } } }); });
+    await open('online'); assert(await page.locator('[data-po-action="online-download"]').count() === 0, 'Old search capabilities survived hydrate'); assert(await page.locator('[data-po-search] input').inputValue() === '下一部电影', 'Old query survived hydrate');
+    await open('subtitles'); assert(await page.locator('[data-po-action="subtitle-off"]').getAttribute('aria-pressed') !== 'true', 'Old subtitle-off state survived'); assert(await page.evaluate(() => po.panel.mode() === 'sort_list'), 'Old item play mode survived');
+  });
   await test('在线搜索不会自动下载，删除必须再次明确确认', async () => {
     await boot({ tracks: true }); await open('subtitles'); await click('open', 'online'); await page.locator('[data-po-search] input').fill('Example'); await page.locator('[data-po-search] button').click(); await page.waitForSelector('[data-po-action="online-download"]');
     assert(await page.evaluate(() => !po.calls.some(c => c.body?.action === 'download')), 'Search triggered a download'); await click('online-download', 'result-one'); await page.waitForFunction(() => po.calls.some(c => c.body?.action === 'download'));

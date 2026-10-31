@@ -6,14 +6,11 @@
 
 ```js
 import { createMoviePlaybackService } from './movie-playback-service.mjs';
+import { movieSourceUrl } from './movie-http.mjs';
 
 const movies = createMoviePlaybackService({
   dir, // 可选：本机私有配置目录，原子保存 movie-preferences.json。
-  makeUrl({ id, sourceId, kind, resourceId }, { client }) {
-    const base = '/api/play/source/' + encodeURIComponent(id) + '/' + sourceId;
-    const suffix = resourceId ? '/' + resourceId : '';
-    return base + suffix + '?client=' + encodeURIComponent(client);
-  },
+  makeUrl: movieSourceUrl,
   onWarning(warning) { /* 仅 code/message，无 NAS 地址、路径或令牌。 */ },
 });
 
@@ -23,7 +20,7 @@ const original = movies.register(id, owner, nas, play, {
 });
 ```
 
-`makeUrl(descriptor, urlContext)` 必须同步返回以 `/` 开头的本机相对 URL，不接受外部 URL。`descriptor` 包含 `id/owner/sourceId/kind`，资源还含 `resourceId`；kind 为 `original/hls/hls-resource`。原画和 HLS 均由此映射；HLS 内的每条嵌套清单、分段、密钥地址也由此映射。根在**每次调用**传入当前请求的 `urlContext`，使地址携带正确的本机能力令牌；模块不从全局账号或全局 capability 拼接 URL。
+`makeUrl(descriptor, urlContext)` 必须同步返回以 `/` 开头的本机相对 URL，不接受外部 URL。`descriptor` 包含 `id/owner/sourceId/kind/manifest`，资源还含 `resourceId`；kind 为 `original/hls/hls-resource`。manifest仅是布尔，不携带NAS路径；推荐复用 `movieSourceUrl`，生成HLS根 `/playlist.m3u8` 和嵌套 `/:resourceId.m3u8`，保留LG的HLS识别扩展。原画和 HLS 均由此映射；HLS 内的每条嵌套清单、分段、密钥地址也由此映射。根在**每次调用**传入当前请求的 `urlContext`，使地址携带正确的本机能力令牌；模块不从全局账号或全局 capability 拼接 URL。
 
 `register` 保存最少的播放文件和片目信息，创建独立的种子 snapshot 和原画连接；后续 metadata、HLS 及新原画候选一律从该种子 snapshot 派生。没有 `snapshot()` 时从旧 snapshot 的 config 复制 `UgOS`。新的连接不得更换账号身份、认证方式、TLS pin，也不得复用原对象、原 Agent 或可变的原 config。关闭只销毁这些自有连接，不销毁传入的上游 NAS。
 
@@ -129,4 +126,4 @@ if (resource.manifest) {
 node --test test/movie-playback-service.test.mjs
 ```
 
-20项测试包含 owner/账号切换、损坏 snapshot、事务失败回滚、绝对 TTL、取消迟到、两次 commit 竞态、旧 close 失败/超时、URL 预检、原子偏好与同ID重登记、显式字幕写操作，以及真实 `PlaybackSession` 配合假 NAS 流的 HLS重写、独立task和敏感报错过滤。没有以 NAS 元数据或 mock 成功宣称 C5 原生解码、音轨、HDR 或全功能验收。
+21项测试包含 owner/账号切换、损坏 snapshot、事务失败回滚、绝对 TTL、取消迟到、两次 commit 竞态、旧 close 失败/超时、URL 预检、原子偏好与同ID重登记、显式字幕写操作，以及真实 `PlaybackSession` 配合假 NAS 流的 HLS重写、独立task和敏感报错过滤。options 还返回稳定 SHA-256 `preferenceScope`，外挂 selection 仅接受安全 `{kind:'external',label,language?}`，不接受临时ID或路径；新增测试覆盖其稳定性、跨账号隔离与白名单。没有以 NAS 元数据或 mock 成功宣称 C5 原生解码、音轨、HDR 或全功能验收。

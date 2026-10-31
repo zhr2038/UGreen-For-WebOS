@@ -57,6 +57,7 @@ LG 的 ConnectSDK 公布了 `ssap://media.viewer/open` 的图片请求形状（t
 - `/photo-motion/<cap>`：同样校验 `kind=live` 后使用流式转发。
 - 原图和动态部分不能进入 `Thumbnails` / `NativeThumbnails`，也不能走仅认识 JPEG / PNG / WebP 的图片 MIME 猜测分支。应保留 NAS Content-Type。
 - 更换 NAS / 账号时 `await photos.clear()`，清除图片、分类、目录、回忆句柄并关闭本账号全部相册转码任务。
+- 原始/实况/音乐流代理必须使用`photos.stream(asset).nas`作为proxy第六参数；仅保留path/query后改用全局NAS会破坏账号隔离。内部PhotoAccount拥有独立配置/Agent，异步前后及图流chunk校验账号epoch，详见[账号生命周期](PHOTO-ACCOUNTS.md)。
 - 客户端更换连接后调用 `photoGallery.reset()`，避免把上一账号的相册、分类或搜索上下文带到新连接。
 
 相册视频路由（全部按同一客户端 owner 认证）：
@@ -64,6 +65,7 @@ LG 的 ConnectSDK 公布了 `ssap://media.viewer/open` 的图片请求形状（t
 - `POST /api/photos/video/start`，`{asset:<video-cap>}` → `photos.videos.start(body, owner)`，返回 `{id,options,original}`。只有 `kind=video` 且已获准显示的能力可以创建任务；不接受路径或浏览器照片 ID。
 - `POST /api/photos/video/quality`，`{id,quality,request}` → `photos.videos.quality(body, owner)`，返回 `{kind,quality,url,candidate,request}`。每次切换独立准备候选任务，旧任务保持可用。
 - `POST /api/photos/video/commit`，`{id,candidate}` → `photos.videos.commit(body, owner)`。前端收到新源首帧 `loadeddata` 后确认，才关闭旧任务。
+- `GET /api/photos/video/active?id=<root>` → `photos.videos.active({id},owner)`，读取`candidate/selected/quality/kind/url`；用于commit响应丢失时核实最后接受的候选（原画也保留候选ID）。单次commit HTTP断开不关闭已接受root；不能盲目回退旧源。
 - `POST /api/photos/video/discard`，`{id,candidate?,request?}` → `photos.videos.discard(body, owner)`。关闭面板、加载失败、超时和迟到响应均显式丢弃候选；取消时尚未拿到候选 ID 可按本根会话内的 request 取消。
 - `POST /api/photos/video/close`，`{id}` → `photos.videos.close(body, owner)`。
 - `GET /photo-hls/<40hex-candidate>/<master-or-32hex-resource>`：master 用 `photos.videos.manifest(id,'master',owner,signal)`；子资源先 `photos.videos.resource`，`manifest=true` 则递归重写 manifest，否则固定 NAS 路径原字节转发。manifest 内的资源 URL 必须通过现有客户端能力 URL 处理器补认证，NAS token 不传给浏览器。HLS URL 用候选 ID，commit 后该 ID 继续有效；不能误把 UI 根会话 ID 当 HLS ID。
@@ -79,7 +81,7 @@ LG 的 ConnectSDK 公布了 `ssap://media.viewer/open` 的图片请求形状（t
 
 ## 验证范围与剩余差距
 
-32 条 Node 回归覆盖协议、owner 隔离、原图 / 实况、目录 / 回忆 / 音乐、敏感预览、相册转码、双账号独立连接快照、候选画质的确认 / 取消及绝对期限、旧任务关闭结果未知的报告，以及 SSAP 的限时清理。15 条独立 Playwright CLI 流程覆盖预览、遥控焦点、目录返回、回忆、幻灯片、背景音乐资源互斥、敏感显隐、速度及画质确认 / 取消 / 解码失败回退；这使用 fake 媒体元素，不代表实机解码或显示验收。
+Node回归覆盖协议、owner隔离、原图/实况、目录/回忆/音乐、敏感预览、账号epoch与独立连接快照、相册转码事务及SSAP限时清理；新增账号/HTTP聚焦范围见[PHOTO-ACCOUNTS.md](PHOTO-ACCOUNTS.md)。图库现有41条独立Playwright CLI流程，入口`node tools/check-ui.mjs --photos`，覆盖原有浏览/遥控/幻灯片/画质流程及七类UI竞态、共享主video归还、无transform祖先、overlay透明与清理、旧lease/srcIntent、隐藏后的迟到上传和commit响应丢失对账。测试用受控API及fake媒体事件：decoder mock按`src`的`/photo-uhd/`路径给出4K尺寸，不依赖video id。没有借此宣称C5实际解码、物理4K或可听验收。
 
 真实 NAS 只读调用已覆盖分类、分类照片、详情、原图、实况、目录、回忆列表 / 播放列表及自带 BGM Range；目录根到子目录、12 张推荐卡片、15 项样本播放列表、3 首自带音乐读取成功。没有上传、删除、编辑、重建索引、更改 NAS 设置或创建真实转码任务。
 

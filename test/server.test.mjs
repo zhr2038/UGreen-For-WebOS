@@ -60,10 +60,11 @@ test('bridge isolates NAS credentials, forwards ranges and scopes playback to th
   assert.equal(posterMetadata.width, 480); assert.equal(posterMetadata.height, 720);
   const response = await fetch(base + '/api/play', { method: 'POST', headers, body: JSON.stringify({ id: 1, type: 1, library: 1, path: '/etc/passwd' }) });
   assert.equal(response.status, 200); const play = await response.json(); assert.equal(play.position, 15); assert.equal(play.fileIndex, 0);
-  const range = await fetch(base + play.stream + '?client=' + token, { headers: { Range: 'bytes=10-19' } });
+  const streamUrl = client => { const url = new URL(play.stream, base); url.searchParams.set('client', client); return url; };
+  const range = await fetch(streamUrl(token), { headers: { Range: 'bytes=10-19' } });
   assert.equal(range.status, 206); assert.equal(range.headers.get('content-range'), 'bytes 10-19/36'); assert.equal(await range.text(), 'abcdefghij');
   assert.equal(calls.find(c => c.range)?.range, 'bytes=10-19');
-  assert.equal((await fetch(base + play.stream + '?client=' + other)).status, 404);
+  assert.equal((await fetch(streamUrl(other))).status, 404);
   assert.equal((await fetch(base + '/api/progress', { method: 'POST', headers, body: JSON.stringify({ id: play.id, position: 500, duration: 300 }) })).status, 400);
   const progress = await fetch(base + '/api/progress', { method: 'POST', headers, body: JSON.stringify({ id: play.id, position: 45, duration: 300 }) });
   assert.equal(progress.status, 200); assert.equal(calls.find(c => c.progress)?.progress.recently_played.current_play_time, 45);

@@ -6,6 +6,8 @@
 
 本模块提供协商、SDK 事件解码、LG 运行环境 / ELF ABI 检查、可注入的原生绑定生命周期、身份验证门槛及中继回退。未携带或分发从官方 APK 提取的原生库。
 
+个人私有诊断已在真实 C5独立 App UID5059中通过 Bionic SDK版本读取及全禁网 init/release/进程退出；没有执行联网初始化、SDK start或NAS数据传输。详细范围、线程/内存事实与剩余缺件见 [P2P-NATIVE-FEASIBILITY.md](P2P-NATIVE-FEASIBILITY.md)。专有库没有进入公开 App或仓库。
+
 **独立的受信 LAN HTTPS 加速已在 C5 验证可用。** 它使用官方 SmartDNS，不依赖尚未贯通的 SDK，也不称为 P2P。可仅取 `lib/transport/trusted-lan.mjs` 和 `test/transport-lan.test.mjs` 接入热修。
 
 ## 受信 LAN HTTPS：可独立接入
@@ -75,7 +77,7 @@ SDK 的 `init`、`startAgent`、`stopAgent` 参数由 `lib/transport/ug-agent.mj
 
 只读查询结果：C5 内核是 `aarch64`，其 Node.js 进程的 `process.arch` 是 `arm`，即 32 位 ARM 运行时。
 
-APK 同时提供 Android ARMv7 / ARM64 原生库。ARMv7 的 `libugagentsdk.so` 虽然 ELF machine 同为 ARM，仍依赖 Android 的 `liblog.so`、`libc.so`、JNI 和 Android ABI；不能作为 LG glibc Node 绑定直接加载。单独匹配 CPU 架构不是兼容性证明。
+APK 同时提供 Android ARMv7 / ARM64 原生库。ARMv7的 `libugagentsdk.so` 虽然 ELF machine同为ARM，仍依赖 Android的 liblog/libc及Bionic ABI，不能作为LG glibc Node绑定直接加载。它包含JNI包装，也导出无需JVM的C门面；本次私有实验通过单独Bionic进程验证了受限运行，未把JNI误当成所有调用的必需条件。
 
 LG 的 [JS Service 文档](https://webostv.developer.lge.com/develop/guides/js-service-basics)明确要求 JavaScript 实现的第三方模块，不支持 C/C++ addon。当前普通 webOS IPK 不能简单塞入 APK 的 `.so` 来获得原生 SDK。
 
@@ -83,21 +85,26 @@ UGREEN 当前[官方下载页](https://ai.ugreen.com/pages/app-download)没有�
 
 ### 当前网络
 
-NAS 的 priority-link 数据没有公网 IPv6。C5 的非回环 IPv6 地址仅为链路本地地址。未修改 NAS、电视或路由器网络配置。
+本次早期只读样本中，NAS的priority-link数据没有公网IPv6，C5的非回环IPv6地址仅为链路本地地址。未修改NAS、电视或路由器网络配置；没有为后续每轮实验重新检查这一可能变化的网络事实。
 
 这意味着目前不能验收官方文档所述的公网 IPv6 直连路径，但不能据此断言全部 IPv4 UDP P2P 都不可能。官方[连接说明](https://support.ugnas.com/detail/article/en-US/671)也要求对实际网络做判断，并在穿透失败时回退中继。
 
 ## 根程序接入合同
 
 ```js
-import { NativeTransport, UgAgentDriver } from './lib/transport/index.mjs';
+import { NativeTransport, UgAgentDriver, createAgentBaseConfig } from './lib/transport/index.mjs';
 import { UgOS } from './lib/ugos.mjs';
 
 const transport = new NativeTransport({
   nas,
   alias: config.alias,
   relayOrigin: config.server,
-  driver: new UgAgentDriver({ binding: optionalLgCompatibleBinding }),
+  driver: new UgAgentDriver({
+    binding: optionalLgCompatibleBinding,
+    // Caller chooses the trusted official cloud API origin; no guessed default.
+    // Binding must execute in its verified private cwd; file logging stays denied.
+    baseConfig: createAgentBaseConfig({ cloudApiOrigin: trustedOfficialCloudApiOrigin, logPath: '.' }),
+  }),
   verifyRoute: async (route, { signal }) => {
     const probe = new UgOS({ ...config, server: route.origin, tlsFingerprint: undefined });
     try {
@@ -122,23 +129,26 @@ await transport.stop();
 这是本项目的适配接口，不是对官方 SDK 可用性的声明：
 
 - `metadata`：`{ apiVersion: 1, platform: 'linux', arch: 'arm', abi: 'glibc', name, version }`。
+- 隔离的Bionic进程另需 `abi:'bionic'`、`execution:'isolated-process'`、`lifecycle:'single-session-worker'`、`workerProtocol:'cloudframe-ugagent-stdio-v1'`、`runtime:{abi:'bionic',arch:'arm',apiLevel:24}`。只有离线init能力仍返回 `NATIVE_ENGINE_CONNECT_NOT_READY`；完整连接API和显式 `capabilities.authenticatedConnect:true` 也仅代表binding接口可用，P2P仍需选路后认证字节验证。
 - `init(json)`、`startAgent(json)`、`stopAgent()`：保留官方包装层的 JSON 字段及返回码语义，负数表示失败。
 - `subscribe(callback)`：传递原始 `(eventNumber, jsonString)`，返回取消订阅函数。
 - 绑定来自受信任的应用代码，并负责把底层 SDK 调用限制在可取消、可关闭的单个会话中；不能从前端 JSON 动态生成。
 
 默认没有 native binding，`nativeAvailable=false`、`nativeP2p=false`，原因是 `NATIVE_ENGINE_NOT_INSTALLED`。这一路径可正常读取协商并继续使用既有中继。
 
+baseConfig必须明确注入；`createAgentBaseConfig` 从可信HTTPS云API地址提取host/port并按恢复出的provider字段构造配置。缺失、无效或混入NAS凭据的配置在init前拒绝。原生SDK的直接校验要求非缺失的logPath，因此调用者也必须提供经过私有cwd验证的路径；这不等于允许SDK写日志。这一APK确实通过manager/c.d()→HttpUrl→UgAgentP2pConfig选择api.ugnas.com:443；仍不在driver内部写死地址或猜其他区域配置。
+
 ## 尚需完成的原生贯通
 
-1. 获得 LG Linux ARM 可运行的原生引擎构建，或完成经过验证的独立协议实现 / 私有兼容运行时。
+1. 将已证明可受限运行的私有Bionic路径封装为完整、受监督、可取消的单会话worker，并验证遵循电视现有DNS的解析行为。
 2. 将上述接口接到实际 SDK，而不是测试 fake；用官方 `event=6` 证明选路种类。
 3. 经选中的本机代理验证已登录 NAS 身份，再读视频 / 照片流，并测量传输路径及字节计数。
 4. 在真正不同的网络下验证穿透、断线、重新协商和中继回退。局域网直连不能冒充 NAT P2P。
 
-本轮没有部署原生库、启动电视 App、切换输入源、改变网络或修改 NAS 用户数据。
+只有经单独审核的私有隐藏诊断部署过SDK运行时；未启动诊断UI或主App、未切换输入源、未改变网络或修改NAS用户数据。公开App没有携带SDK库，也没有宣称原生P2P已贯通。
 
 ## 验证
 
-`node --test test/transport.test.mjs` 的 12 项测试覆盖协商隐私、实际事件分类、缺失 SDK 回退、认证身份门槛、迟到结果取消、原生绑定资源释放和 ABI / IPv6 证据边界。测试注入 fake SDK，只证明接口与状态机，不证明真实 P2P 已可用。
+`node --test test/transport.test.mjs`的15项测试覆盖协商隐私、事件分类、缺失SDK回退、认证身份门槛、取消、资源释放、显式云配置和隔离Bionic ABI/连接能力边界。测试注入fake SDK，只证明接口与状态机，不证明真实P2P已可用。
 
 可用 `node tools/p2p-inspect-native.mjs PATH arm` 只读检查一个本地 ELF 文件；该工具不会执行它，也不会自动把它加入发布包。

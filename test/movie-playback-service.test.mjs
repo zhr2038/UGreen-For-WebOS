@@ -21,7 +21,7 @@ class FakeSession {
   async describe(){if(this.tracker.describeGate)await this.tracker.describeGate.promise;if(this.closed)throw new Error('session closed');await this.nas.request('pre_info');return{qualities:variants,subtitles:[{id:'external:one',kind:'external',codec:'srt',label:'subtitle.srt'}],audio:[],source:{resolution:'1920x1080'},selected:'original'};}
   async selectQuality(id){this.quality=id;await this.nas.request('create',{task_id:this.id});if(this.tracker.selectGate)await this.tracker.selectGate.promise;if(this.closed)throw new Error('cancelled session');return{kind:'hls',quality:variants.find(q=>q.id===id)};}
   async manifest(map){if(this.closed)throw new Error('session closed');await this.nas.request('m3u8');return{body:'#EXTM3U\n'+map('segment-one')+'\n',contentType:'application/vnd.apple.mpegurl'};}
-  resource(id){if(id!=='segment-one')throw new Error('unknown segment');return{path:'/ugreen/v2/stream/transcode/get/private-segment.ts',query:{task_id:this.id},manifest:false};}
+  resource(id){if(id==='child-one')return{path:'/ugreen/v2/stream/transcode/private-child.m3u8',query:{task_id:this.id},manifest:true};if(id!=='segment-one')throw new Error('unknown segment');return{path:'/ugreen/v2/stream/transcode/get/private-segment.ts',query:{task_id:this.id},manifest:false};}
   async subtitle(){return{body:'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nExample\n',contentType:'text/vtt'};}
   async searchSubtitles(){return{items:[{id:'result-one',label:'Example',language:'en'}]};}
   async downloadSubtitle(){this.tracker.writes.push('download');return{status:2,subtitle:{id:'external:downloaded',codec:'srt',kind:'external',label:'downloaded.srt'}};}
@@ -95,6 +95,13 @@ test('HLS local URLs are mapped with the caller context while backend resource d
   const resource=f.service.resource({id:'play-a',sourceId:c.sourceId,resourceId:'segment-one'},'owner-a');assert.ok(resource.path.includes('/transcode/get/'));assert.equal(JSON.stringify(resource).includes('private-segment'),false);
 });
 
+test('URL mappers receive only an explicit manifest flag for roots, nested playlists and binary resources',async t=>{
+  const calls=[],f=fixture({makeUrl:value=>{calls.push({...value});return'/safe/'+value.sourceId;}});t.after(()=>f.service.reset());await register(f);assert.equal(calls.at(-1).manifest,false);
+  const candidate=await f.service.prepareQuality({id:'play-a',qualityId:'720P@1280x720'},'owner-a');assert.equal(calls.at(-1).manifest,true);
+  const session=f.tracker.sessions.find(s=>s.quality);session.manifest=async map=>({body:'#EXTM3U\n'+map('child-one')+'\n'+map('segment-one')+'\n',contentType:'application/vnd.apple.mpegurl'});await f.service.manifest({id:'play-a',sourceId:candidate.sourceId},'owner-a');
+  assert.equal(calls.find(c=>c.resourceId==='child-one').manifest,true);assert.equal(calls.find(c=>c.resourceId==='segment-one').manifest,false);assert.ok(calls.every(c=>!('path'in c)&&!('query'in c)&&!('nas'in c)));assert.equal(JSON.stringify(calls).includes(configA.token),false);assert.equal(JSON.stringify(calls).includes(play.file.path),false);
+});
+
 test('preferences use an atomic opaque-account/item store, reject unsafe fields and isolate accounts',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'movie-prefs-'));t.after(()=>rm(dir,{recursive:true,force:true}));const f=fixture({dir});t.after(()=>f.service.reset());await register(f);
   await Promise.all([f.service.preferences({id:'play-a',preferences:{mode:'loop_list'}},'owner-a'),f.service.preferences({id:'play-a',preferences:{rate:1.5,subtitle:{offset:.05,color:'#FFFF00'}}},'owner-a')]);
@@ -122,6 +129,13 @@ test('hung cleanup is bounded, destroys its transport and reports uncertainty',a
 test('preference validation accepts only finite bounded fields and plain objects',()=>{
   for(const value of [null,[],{rate:Infinity},{audio:{index:-1}},{subtitle:{position:100}},{subtitle:{selection:{kind:'off',path:'/private'}}},Object.create({rate:1})])assert.throws(()=>validateMoviePreferences(value));
   assert.deepEqual(validateMoviePreferences({fit:'contain',subtitle:{selection:{kind:'off'},opacity:.8}}),{fit:'contain',subtitle:{selection:{kind:'off'},opacity:.8}});
+});
+
+test('preference scopes are stable opaque account/item identities and external selections persist only safe labels',async t=>{
+  const f=fixture();t.after(()=>f.service.reset());await register(f);const a=await f.service.options('play-a','owner-a');assert.match(a.preferenceScope,/^[a-f0-9]{64}$/);await register(f,'play-b');assert.equal((await f.service.options('play-b','owner-a')).preferenceScope,a.preferenceScope);
+  await f.service.preferences({id:'play-a',preferences:{subtitle:{selection:{kind:'external',label:'Movie.zh.srt',language:'zh'}}}},'owner-a');assert.equal((await f.service.options('play-a','owner-a')).preferences.subtitle.selection.label,'Movie.zh.srt');
+  for(const selection of [{kind:'external',label:'/private/movie.srt'},{kind:'external',label:'Movie.srt',id:'external:ephemeral'},{kind:'external',label:configA.token},{kind:'external',label:'',language:'zh'}])await assert.rejects(f.service.preferences({id:'play-a',preferences:{subtitle:{selection}}},'owner-a'));
+  f.upstream.config={...configA,username:'other',token:'OTHER_ACCOUNT_TOKEN'};await register(f,'play-c');assert.notEqual((await f.service.options('play-c','owner-a')).preferenceScope,a.preferenceScope);
 });
 
 test('snapshot aliases are rejected without destroying the upstream or active transport',async t=>{

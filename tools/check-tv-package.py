@@ -2,6 +2,7 @@
 import io
 import json
 import pathlib
+import re
 import struct
 import sys
 import tarfile
@@ -23,6 +24,13 @@ with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
     files = {m.name: archive.extractfile(m).read() for m in archive.getmembers() if m.isfile()}
 app = next(json.loads(v) for k, v in files.items() if k.endswith('/appinfo.json'))
 assert app['id'] == 'top.hrhome.nascinema' and app['title'] == '云映' and app['version'] == json.loads((root / 'package.json').read_text())['version']
+app_prefix = next(k.rsplit('/', 1)[0] for k in files if k.endswith('/applications/top.hrhome.nascinema/index.html'))
+index = files[app_prefix + '/index.html'].decode()
+for asset in re.findall(r'(?:src|href)="([^"/#]+\.(?:js|css))"', index):
+    assert app_prefix + '/' + asset in files, 'Missing app asset: ' + asset
+assert app_prefix + '/heif-assets.js' in files, 'Missing lazy HEIF decoder'
+for notice in ['HEIF-NOTICES.md', 'libde265-COPYING.txt', 'libheif-COPYING.txt', 'libheif-js-LGPL-3.0.txt']:
+    assert app_prefix + '/licenses/heif/' + notice in files, 'Missing HEIF notice: ' + notice
 service = next(v for k, v in files.items() if k.endswith('/top.hrhome.nascinema.service/service.js'))
 assert b'ownerTest' not in service and b'qaCandidate' not in service and b'Invalid test capability' not in service
 assert b'require("sharp")' not in service and b'require("./' not in service

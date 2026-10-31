@@ -6,9 +6,10 @@
   const COLORS = { '#FFFFFF': '白色', '#FFFF00': '黄色', '#FF0000': '红色', '#00FF00': '绿色', '#0000FF': '蓝色', '#000000': '黑色' };
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const list = value => value ? Array.from({ length: value.length || 0 }, (_, i) => value[i]).filter(Boolean) : [];
+  const preferenceDefaults = () => ({ mode: 'sort_list', rate: 1, fit: 'contain', subtitle: { offset: 0, size: 100, color: '#FFFFFF', position: 90, language: '' } });
   window.createPlayerOptions = ({ video, api, asset = path => path, root, getPlayback, onSourceSwitch, onClose = () => {}, toast = () => {}, tracks, store, focus: setFocus } = {}) => {
     if (!video || typeof api !== 'function' || typeof getPlayback !== 'function' || typeof onSourceSwitch !== 'function') throw new TypeError('Player options require video, api, getPlayback and onSourceSwitch');
-    const S = { active: false, page: 'settings', generation: 0, id: null, options: null, busy: false, message: '', preferences: { mode: 'sort_list', rate: 1, fit: 'contain', subtitle: { offset: 0, size: 100, color: '#FFFFFF', position: 90, language: '' } } };
+    const S = { active: false, page: 'settings', generation: 0, id: null, options: null, busy: false, message: '', preferences: preferenceDefaults() };
     try { const saved = JSON.parse(store?.get('player.preferences', '{}') || '{}'); if (MODES[saved.mode]) S.preferences.mode = saved.mode; if (RATES.includes(saved.rate)) S.preferences.rate = saved.rate; if (FITS[saved.fit]) S.preferences.fit = saved.fit; } catch {}
     const host = () => typeof root === 'function' ? root() : root;
     const current = () => { const p = getPlayback(); return p && p.id != null ? p : null; };
@@ -17,6 +18,11 @@
     function focus(element) { if (!element) return; if (setFocus) setFocus(element); else { element.focus(); element.scrollIntoView?.({ block: 'nearest' }); } }
     function abort() { S.abort?.abort(); S.abort = null; S.generation++; S.busy = false; }
     function close() { const wasActive = S.active; abort(); S.active = false; S.element?.remove(); S.element = null; if (wasActive) onClose(); }
+    function resetPlayback(p) {
+      const id = String(p.id); if (S.id === id) return false;
+      abort(); S.id = id; S.options = null; S.qualityId = null; S.subtitleOff = false;
+      S.results = []; S.query = ''; S.deleteItem = null; S.preferences = preferenceDefaults(); return true;
+    }
     function stateTracks() { try { return tracks?.state?.() || {}; } catch { return {}; } }
     function audioOptions() {
       if (tracks?.state) return stateTracks().audio || [];
@@ -38,7 +44,7 @@
     }
     function content() {
       const p = current(), selected = p?.quality?.id || p?.qualityId || S.qualityId || S.options?.selected || 'original';
-      if (S.page === 'settings') return `<h2>播放设置</h2>${button('画质', 'open', 'quality', { detail: S.options?.qualities?.find(q => q.id === selected)?.label || '原画' })}${button('音轨', 'open', 'audio')}${button('字幕', 'open', 'subtitles')}${button('播放速度', 'open', 'rate', { detail: (video.playbackRate || 1) + '×' })}${button('播放模式', 'open', 'mode', { detail: MODES[S.preferences.mode] })}${button('画面比例', 'open', 'fit', { detail: FITS[S.preferences.fit] })}`;
+      if (S.page === 'settings') return `<h2>播放设置</h2>${button('画质', 'open', 'quality', { detail: S.options?.qualities?.find(q => q.id === selected)?.label || '原画' })}${button('音轨', 'open', 'audio')}${button('字幕', 'open', 'subtitles')}${button('播放速度', 'open', 'rate', { detail: (video.playbackRate || 1) + '×' })}${button('播放模式', 'open', 'mode', { detail: MODES[S.preferences.mode] })}${button('画面比例', 'open', 'fit', { detail: FITS[S.preferences.fit] })}${button('跳过片头片尾', 'skip', '', { disabled: !p?.skips, detail: p?.skips ? p.skips.enabled ? '已开启' : '已关闭' : '正在读取标记' })}`;
       if (S.page === 'quality') {
         const qualities = S.options?.qualities || [{ id: 'original', label: '原画', original: true }];
         return `<h2>画质</h2><p>仅显示 NAS 为此影片提供的画质。</p>${qualities.map(q => button(q.label || q.id, 'quality', q.id, { selected: q.id === selected, detail: q.resolution || '' })).join('')}${!S.options ? button('重新读取画质', 'reload') : ''}`;
@@ -74,11 +80,11 @@
     async function ensureOptions(generation) {
       const result = await api('/api/play/options?id=' + encodeURIComponent(S.id), undefined, S.abort?.signal);
       if (!same(generation)) return;
-      S.options = result; if (result.preferences) { S.preferences = { ...S.preferences, ...result.preferences, subtitle: { ...S.preferences.subtitle, ...result.preferences.subtitle } }; }
+      S.options = result; if (result.preferences && !current()?.preferencesChanged) { S.preferences = { ...S.preferences, ...result.preferences, subtitle: { ...S.preferences.subtitle, ...result.preferences.subtitle } }; }
     }
     async function open(page = 'settings') {
       const p = current(); if (!p || !host()) return;
-      const changed = S.id !== String(p.id); abort(); S.id = String(p.id); if (changed) { S.options = null; S.qualityId = null; S.subtitleOff = false; S.results = []; }
+      resetPlayback(p); abort();
       S.active = true; S.page = page; S.focusTarget = null; S.message = ''; S.abort = new AbortController(); const generation = S.generation; render();
       if (['quality','subtitles','manage'].includes(page) && !S.options) {
         S.busy = true; S.message = '正在读取可用选项…'; render();
@@ -96,7 +102,7 @@
           const selected = S.options?.qualities?.find(q => q.id === value) || (value === 'original' ? { id: value, label: '原画' } : null); if (!selected) throw new Error('这个画质不在 NAS 提供的列表中');
           S.message = '正在准备 ' + selected.label + '…'; render();
           const response = await api('/api/play/quality', { id: S.id, qualityId: value, preferH264: true }, S.abort?.signal);
-          if (!same(generation)) return;
+          if (!same(generation)) { if (response?.candidateId) api('/api/play/quality', { id: response.id, candidateId: response.candidateId, action: 'discard' }).catch(() => {}); return; }
           if (typeof response?.stream !== 'string' || !response.stream) throw new Error('NAS 尚未提供可用播放地址');
           const sourceUrl = asset(response.stream); if (!sourceUrl) throw new Error('播放地址无效');
           await onSourceSwitch(response, { id: S.id, playback: current(), sourceUrl, position: video.currentTime, paused: video.paused, signal: S.abort.signal, isCurrent: () => same(generation) });
@@ -105,9 +111,10 @@
         if (action === 'audio') { const options = audioOptions(), choice = options.find(t => t.id === value); if (!choice) throw new Error('电视未提供这个音轨'); if (tracks?.selectAudio) tracks.selectAudio(value); else { const runtime = list(video.audioTracks); runtime[choice.index].enabled = true; runtime.forEach((t,i) => { if (i !== choice.index && t.enabled) t.enabled = false; }); if (!runtime[choice.index].enabled) throw new Error('电视没有接受音轨切换'); } await persist({ audio: { label: choice.label, language: choice.language, index: choice.index } }, generation); }
         if (action === 'native-subtitle') { const choice = subtitleOptions().find(t => t.id === value); if (!choice) throw new Error('电视未提供这个字幕'); if (tracks?.selectText) tracks.selectText(value); else list(video.textTracks).filter(t => !['metadata','chapters'].includes(t.kind)).forEach((t,i) => t.mode = i === choice.index ? 'showing' : 'disabled'); S.subtitleOff = false; await persist({ subtitle: { selection: { kind: 'native', label: choice.label, language: choice.language, index: choice.index } } }, generation); }
         if (action === 'subtitle-off') { if (tracks?.off) tracks.off(); else list(video.textTracks).forEach(t => t.mode = 'disabled'); S.subtitleOff = true; await persist({ subtitle: { selection: { kind: 'off' } } }, generation); }
-        if (action === 'external-subtitle') { await applyExternal(value); if (same(generation)) S.subtitleOff = false; }
+        if (action === 'external-subtitle') { await applyExternal(value, generation); if (same(generation)) S.subtitleOff = false; }
         if (action === 'rate') { const rate = Number(value); if (!RATES.includes(rate)) throw new Error('无效的播放速度'); if (tracks?.setRate) tracks.setRate(rate, { passthrough: Boolean(current()?.passthrough) }); else { if (current()?.passthrough && rate !== 1) throw new Error('音频直通仅支持正常速度'); video.playbackRate = rate; if (video.playbackRate !== rate) throw new Error('电视没有接受这个倍速'); } await persist({ rate }, generation); }
         if (action === 'mode') { if (!MODES[value]) throw new Error('无效的播放模式'); await persist({ mode: value }, generation); }
+        if (action === 'skip') { const p = current(); if (!p?.skips) throw new Error('片头片尾设置尚未读取'); const enabled = !p.skips.enabled; await api('/api/play/preferences', { id: S.id, action: 'skip', enabled }, S.abort?.signal); if (same(generation)) p.skips.enabled = enabled; }
         if (action === 'fit') { if (!FITS[value]) throw new Error('无效的画面比例'); if (tracks?.setFit) tracks.setFit(value); else video.style.objectFit = value; await persist({ fit: value }, generation); }
         if (['offset','size','color','position','subtitle-reset'].includes(action)) {
           if (!tracks?.setStyle || !tracks?.setOffset) throw new Error('字幕调整暂不可用');
@@ -119,16 +126,21 @@
           if (applied?.applied === false) S.message = '已保存偏好；' + (applied.reason || '当前字幕尚未提供可调整的文本。');
         }
         if (action === 'language') { let applied = tracks?.selectLanguage?.('subtitle', value); await persist({ subtitle: { language: value } }, generation); if (applied?.applied === false || !tracks?.selectLanguage) S.message = '已保存语言偏好；当前没有对应的可用轨道。'; }
-        if (action === 'online-download') { const result = await api('/api/play/subtitle', { id: S.id, action: 'download', resultId: value }, S.abort?.signal); if (same(generation)) { if (result.subtitle?.id) { S.options ||= { subtitles: [] }; S.options.subtitles ||= []; S.options.subtitles.push(result.subtitle); await applyExternal(result.subtitle.id); } else S.message = '下载请求已提交，请稍后重新读取字幕。'; } }
+        if (action === 'online-download') { const result = await api('/api/play/subtitle', { id: S.id, action: 'download', resultId: value }, S.abort?.signal); if (same(generation)) { if (result.subtitle?.id) { S.options ||= { subtitles: [] }; S.options.subtitles ||= []; S.options.subtitles.push(result.subtitle); await applyExternal(result.subtitle.id, generation); } else S.message = '下载请求已提交，请稍后重新读取字幕。'; } }
         if (action === 'delete') { await api('/api/play/subtitle', { id: S.id, action: 'delete', subtitleId: value }, S.abort?.signal); if (same(generation)) { S.options = null; await open('manage'); return; } }
       } catch (error) { if (same(generation)) { S.message = error.message || '操作失败'; toast(S.message); } }
       finally { if (same(generation)) { S.busy = false; render(); } }
     }
-    async function applyExternal(id) {
+    async function applyExternal(id, generation) {
       const option = S.options?.subtitles?.find(s => s.id === id);
-      if (/^(ass|ssa)$/i.test(option?.codec || '') && tracks?.state?.().assAvailable && tracks?.selectAss) return tracks.selectAss(id);
       if (!tracks?.selectExternal) throw new Error('外挂字幕播放暂不可用');
-      return tracks.selectExternal(id);
+      const options = { descriptor: option, isCurrent: () => same(generation) };
+      const result = await (/^(ass|ssa)$/i.test(option?.codec || '') && tracks?.state?.().assAvailable && tracks?.selectAss ? tracks.selectAss(id, options) : tracks.selectExternal(id, options));
+      if (!same(generation) || result?.cancelled) return;
+      if (typeof option?.label !== 'string' || !option.label.trim() || option.label.length > 240 || /[\x00-\x1f/\\?&<>]/.test(option.label)) { S.message = '字幕已应用，未能保存选择'; return; }
+      const selection = { kind: 'external', label: option.label };
+      if (typeof option.language === 'string' && (option.language === '' || /^[a-zA-Z]{2,3}(?:[-_][a-zA-Z0-9]{2,8})?$/.test(option.language))) selection.language = option.language;
+      await persist({ subtitle: { selection } }, generation);
     }
     function bind() {
       S.element?.querySelectorAll('[data-po-action]').forEach(b => b.onclick = () => run(b.dataset.poAction, b.dataset.poValue));
@@ -157,6 +169,7 @@
       } else target = controls[controls.indexOf(active) + (['up','left'].includes(direction) ? -1 : 1)];
       event.preventDefault(); focus(target); return true;
     }
-    return { open, render, bind, close, back, key, active: () => S.active, mode: () => S.preferences.mode, preferences: () => JSON.parse(JSON.stringify(S.preferences)), nextIndex(index, length) { if (!Number.isInteger(index) || !Number.isInteger(length) || length < 1 || index < 0 || index >= length) return null; if (S.preferences.mode === 'loop_single') return index; if (index + 1 < length) return index + 1; return S.preferences.mode === 'loop_list' ? 0 : null; } };
+    function hydrate(result) { const p = current(); if (!p || !result) return; resetPlayback(p); S.options = result; if (result.preferences && !p.preferencesChanged) S.preferences = { ...S.preferences, ...result.preferences, subtitle: { ...S.preferences.subtitle, ...result.preferences.subtitle } }; }
+    return { open, render, bind, close, back, key, hydrate, active: () => S.active, mode: () => S.preferences.mode, preferences: () => JSON.parse(JSON.stringify(S.preferences)), nextIndex(index, length) { if (!Number.isInteger(index) || !Number.isInteger(length) || length < 1 || index < 0 || index >= length) return null; if (S.preferences.mode === 'loop_single') return index; if (index + 1 < length) return index + 1; return S.preferences.mode === 'loop_list' ? 0 : null; } };
   };
 })();

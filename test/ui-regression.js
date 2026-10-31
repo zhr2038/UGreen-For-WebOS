@@ -51,11 +51,21 @@ async page => {
     if (url.pathname === '/api/direct/logout') { state.directConnected = false; return response(route, { connected: false }); }
     if (url.pathname === '/api/direct/cancel') return response(route, { ok: true });
     if (url.host.startsWith('bad-nas.test')) return response(route, { error: '配对码错误' }, 401);
-    if (url.pathname === '/api/home') return response(route, { name: '测试 NAS', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
+    if (url.pathname === '/api/home') return response(route, { accountScope: state.accountScope || 'account-A', name: '测试 NAS', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
     if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; return response(route, { items: Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1)), total: 120, last: n >= 2 }); }
     if (url.pathname === '/api/detail') return response(route, { item: movie(Number(url.searchParams.get('id'))), files: [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }], actors: [], technical: { container: 'mp4', video_info: { codec: 'h264', resolution: '1920x1080' }, audio_info: [] } });
     if (url.pathname === '/api/play') { const gate = state.playGate; if (gate) await gate.promise; if (state.playError) return response(route, { error: '无法打开版本' }, 503); const id = 'play-' + (++state.playId); return response(route, { id, stream: '/media/' + id, fileIndex: call.body.fileIndex || 0, title: '测试播放', position: call.body.restart ? 0 : 120, duration: 3600, technical: {} }); }
-    if (url.pathname === '/api/progress') { const gate = state.progressGate; if (gate) await gate.promise; return response(route, { ok: true }); }
+    if (url.pathname === '/api/play/options') { if (state.optionsGate) await state.optionsGate.promise; return response(route, { qualities: [{ id: 'original', label: '原画' }, { id: '720p', label: '720P', resolution: '1280×720' }], audio: [], subtitles: [], selected: 'original', preferences: state.preferences || { mode: 'sort_list', rate: 1, fit: 'contain' } }); }
+    if (url.pathname === '/api/play/skips') return response(route, { enabled: false, ranges: [] });
+    if (url.pathname === '/api/play/quality') {
+      if (call.body.action === 'commit') { state.activeSource = { id: call.body.id, sourceId: call.body.candidateId, stream: '/media/candidate', kind: 'hls', quality: { id: '720p', label: '720P' } }; if (state.commitGate) await state.commitGate.promise; return response(route, state.activeSource); }
+      if (call.body.action === 'discard') return response(route, { discarded: true });
+      if (state.qualityGate) await state.qualityGate.promise;
+      return response(route, { id: call.body.id, candidateId: 'candidate-' + state.playId, sourceId: 'candidate-' + state.playId, stream: '/media/candidate', kind: 'hls', quality: { id: '720p', label: '720P' } });
+    }
+    if (url.pathname === '/api/play/active') return response(route, state.activeSource || { sourceId: 'original' });
+    if (url.pathname === '/api/play/close') return response(route, { closed: true });
+    if (url.pathname === '/api/progress') { const gate = state.progressGate; if (gate) await gate.promise; if (state.progressError) return response(route, { error: 'offline' }, 503); return response(route, { ok: true }); }
     if (url.pathname === '/api/search') { const q = url.searchParams.get('q'); if (q === 'slow' && state.searchGate) await state.searchGate.promise; return response(route, { items: [movie(q === 'slow' ? 901 : 902)] }); }
     if (url.pathname === '/api/photos/list') { state.photoRequests++; const video = state.photoVideo; return response(route, { items: [{ id: 'p1', name: video ? '示例视频' : '示例照片', kind: video ? 'video' : 'image', thumb: '/mock-image/photo', view: '/photo-image/' + (state.photoFresh ? 'new' : 'old'), stream: video ? '/photo-video/mock' : '', width: 320, height: 180 }], total: 1, offset: 0, limit: 48, last: true }); }
     if (url.pathname === '/api/pair') return response(route, { token: 'new-client' });
@@ -255,6 +265,57 @@ async page => {
     await page.locator('[data-route="movies"]').click(); await page.waitForSelector('#sort'); await page.locator('#sort').focus(); await page.keyboard.press('Enter'); await page.waitForSelector('.select-overlay');
     for (const key of ['ArrowLeft', 'ArrowRight']) { await page.keyboard.press(key); check(await page.evaluate(() => Boolean(document.activeElement.closest('.select-overlay'))), 'Horizontal key escaped the select overlay'); }
     await page.keyboard.press('Escape'); check(await page.evaluate(() => document.activeElement.id) === 'sort', 'Select did not restore focus');
+  });
+  async function qualityMenu() { await page.locator('#player-settings').click(); await page.locator('[data-po-action="open"][data-po-value="quality"]').click(); await page.waitForSelector('[data-po-action="quality"][data-po-value="720p"]'); }
+  await run('画质切换经过解码和提交后保留进度与暂停状态', async () => {
+    await play(); await page.locator('#video').evaluate(v => { v.currentTime = 777; v.pause(); }); await qualityMenu();
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await page.waitForFunction(() => document.querySelector('.player-buttons .info')?.textContent.includes('720P'));
+    check(await page.locator('#video').evaluate(v => v.currentTime === 777 && v.paused), 'Quality change lost position or pause');
+    check(control.calls.some(c => c.body?.action === 'commit'), 'Decoded candidate was not committed');
+  });
+  await run('画质元数据加载中返回不会切断当前源', async () => {
+    await play(); const old = await page.locator('#video').evaluate(v => v.src); await qualityMenu(); const gate = deferred(); control.gates.push(gate); control.qualityGate = gate;
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await page.keyboard.press('Escape'); gate.resolve(); await delay(120);
+    check(await page.locator('#video').evaluate(v => v.src) === old, 'Cancelled preparation replaced the current source'); check(!control.calls.some(c => c.body?.action === 'commit'), 'Cancelled preparation was committed');
+  });
+  await run('切换画质解码未完成时退出不会上报重载产生的零进度', async () => {
+    await play(); await page.locator('#video').evaluate(v => v.currentTime = 777); await qualityMenu(); await page.evaluate(() => window.__holdMetadata = true);
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await delay(70); await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); await page.locator('#stop-player').click(); await page.waitForSelector('#play'); await delay(100);
+    check(!control.calls.some(c => c.path === '/api/progress' && c.body.position === 0), 'Candidate reload overwrote history with zero');
+    check(await page.locator('#play').textContent() === '继续播放 00:12:57', 'Candidate reload overwrote the detail resume position');
+    check(control.calls.some(c => c.path === '/api/progress' && c.body.position === 777), 'Exiting during quality load lost the final position');
+    check(control.calls.some(c => c.path === '/api/play/close'), 'Exiting failed to close the playback service');
+  });
+  await run('画质提交中关闭设置仍对账并显示真实活动画质', async () => {
+    await play(); await qualityMenu(); const gate = deferred(); control.gates.push(gate); control.commitGate = gate;
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await page.waitForFunction(() => document.querySelector('.player-options')?.dataset.busy === 'true'); await delay(80);
+    await page.keyboard.press('Escape'); gate.resolve(); await page.waitForFunction(() => document.querySelector('.player-buttons .info')?.textContent.includes('720P'));
+    check(!control.calls.some(c => c.body?.action === 'discard'), 'Closing settings discarded an already committing source');
+  });
+  await run('设置提前打开时后台仍恢复播放偏好', async () => {
+    const gate = deferred(); control.gates.push(gate); control.optionsGate = gate; control.preferences = { mode: 'sort_list', rate: 1.5, fit: 'cover' };
+    await play(); await page.locator('#player-settings').click(); gate.resolve();
+    await page.waitForFunction(() => document.querySelector('#video').playbackRate === 1.5 && document.querySelector('#video').style.objectFit === 'cover');
+  });
+  await run('起播响应迟于进度确认仍使用请求开始时的本地续播', async () => {
+    await play(); const progress = deferred(); control.gates.push(progress); control.progressGate = progress;
+    await page.locator('#video').evaluate(v => v.currentTime = 777); await page.locator('#stop-player').click(); await page.waitForSelector('#play');
+    const start = deferred(); control.gates.push(start); control.playGate = start; await page.locator('#play').click(); await delay(80);
+    progress.resolve(); await delay(100); start.resolve(); await page.waitForSelector('#pause');
+    check(await page.locator('#video').evaluate(v => v.currentTime === 777), 'Acknowledgement erased the start request resume snapshot');
+  });
+  await run('同一网关切账号不会串用未同步的本地续播', async () => {
+    await play(); control.progressError = true; await page.locator('#video').evaluate(v => v.currentTime = 777); await page.locator('#stop-player').click(); await page.waitForSelector('#play'); await page.locator('#back').click();
+    await page.locator('[data-route="settings"]').click(); await page.locator('#nas-login').click(); control.accountScope = 'account-B';
+    await page.locator('#nas-user').fill('other-user'); await page.locator('#nas-password').fill('fake-password'); await page.locator('#login-form button').first().click(); await page.waitForSelector('button[data-primary][data-item]');
+    await play(); check(await page.locator('#video').evaluate(v => v.currentTime === 120), 'Previous account resume overrode the current account');
+  });
+  await run('新画质就绪且提交等待中退出保存当前有效进度', async () => {
+    await play(); await qualityMenu(); const gate = deferred(); control.gates.push(gate); control.commitGate = gate;
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await delay(80);
+    await page.locator('#video').evaluate(v => v.currentTime = 800); await page.locator('#stop-player').click(); await page.waitForSelector('#play'); gate.resolve(); await delay(80);
+    check(await page.locator('#play').textContent() === '继续播放 00:13:20', 'Stop saved the pre-switch position after the candidate was ready');
+    check(control.calls.some(c => c.path === '/api/progress' && c.body.position === 800), 'Ready candidate final position was not reported');
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases };
   check(cases.length, 'No UI checks matched the filter');

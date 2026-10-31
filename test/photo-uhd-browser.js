@@ -47,6 +47,20 @@ async page => {
     try { await PhotoUhdPipeline.encodeStill(reduced, { expectedWidth: 3840, expectedHeight: 2160, codec: results[0].codec, hardwareAcceleration: results[0].hardwareAccelerationHint }); }
     catch (error) { refused = error.code === 'SOURCE_DIMENSIONS_MISMATCH'; }
     check(refused, '1280 preview was silently accepted as the requested original');
-    return { capabilities, attempts, results, previewSubstitutionRejected: true, physicalUhdValidated: false };
+    const heif = new Blob([new Uint8Array(32)], { type: 'image/heif' }), canvas = new OffscreenCanvas(96, 64); canvas.getContext('2d').fillRect(0, 0, 96, 64);
+    let closed = 0, seen;
+    const injected = await PhotoUhdPipeline.encodeStill(heif, { expectedWidth: 192, expectedHeight: 128, codec: results[0].codec, hardwareAcceleration: results[0].hardwareAccelerationHint, decodeImage: async (blob, options) => { seen = options; const image = await createImageBitmap(canvas); return { image, sourceWidth: 192, sourceHeight: 128, orientationApplied: true, scaled: true, close() { closed++; image.close(); } }; } });
+    check(seen.targetWidth === 3840 && seen.targetHeight === 2160 && closed === 1, 'Decoder contract or cleanup failed');
+    check(injected.report.sourceWidth === 192 && injected.report.sourceHeight === 128 && injected.report.decodedIntermediateWidth === 96 && injected.report.decodedIntermediateHeight === 64 && injected.report.decoderScaled, 'Scaled intermediate was confused with original dimensions');
+    let mismatched = false;
+    try { await PhotoUhdPipeline.encodeStill(heif, { expectedWidth: 4032, expectedHeight: 3024, codec: results[0].codec, hardwareAcceleration: results[0].hardwareAccelerationHint, decodeImage: async () => ({ image: await createImageBitmap(canvas), sourceWidth: 192, sourceHeight: 128, orientationApplied: true }) }); }
+    catch (error) { mismatched = error.code === 'SOURCE_DIMENSIONS_MISMATCH'; } check(mismatched, 'Decoder may lie about original source dimensions');
+    const controller = new AbortController(); let deliver, started;
+    const decoderStarted = new Promise(resolve => { started = resolve; }); let lateClosed = 0;
+    const cancelled = PhotoUhdPipeline.encodeStill(heif, { expectedWidth: 192, expectedHeight: 128, codec: results[0].codec, hardwareAcceleration: results[0].hardwareAccelerationHint, signal: controller.signal, decodeImage: () => new Promise(resolve => { deliver = resolve; started(); }) });
+    await decoderStarted; controller.abort(); let wasCancelled = false; try { await cancelled; } catch (error) { wasCancelled = error.name === 'AbortError'; }
+    const late = await createImageBitmap(canvas); deliver({ image: late, sourceWidth: 192, sourceHeight: 128, orientationApplied: true, close() { lateClosed++; late.close(); } }); await new Promise(resolve => setTimeout(resolve, 10)); check(wasCancelled && lateClosed === 1, 'Late decoder output leaked after cancellation');
+    canvas.width = 1; canvas.height = 1;
+    return { capabilities, attempts, results, previewSubstitutionRejected: true, injectedDecoderContract: true, injectedDecoderIsNotHevcEvidence: true, lateDecoderClosed: true, physicalUhdValidated: false };
   }, base);
 }

@@ -120,3 +120,10 @@ node test/run-player-options-ui.mjs
 使用项目已有 Playwright CLI 和独立 headless Chrome 会话；只关闭自身会话。9 条模拟 UI 用例通过，覆盖真实动态档位、慢请求 / 重复点击 / 迟到响应、空源拒绝、实际轨道边界、字幕调节、六档倍速、三种队列模式、偏好保存失败、在线写操作的明确点击 / 删除确认，以及遥控器键处理。
 
 已查看 `output/playwright/player-options-settings.png` 和 `player-options-style.png`，修正了设置焦点跳到返回按钮、长面板首尾露出半行内容的问题。截图是模拟内容，不是电视原画解码证据。
+## 后台 hydrate 与外挂选择保存
+
+根可在后台选项返回、仍是同一播放且用户未做较新操作时调用 `options.hydrate(data)`。该方法与 open 共享换片清理：播放ID变更会清空上一个片目的在线字幕结果/查询、关闭字幕标记、删除确认和画质缓存，并从当前片目偏好重新开始，避免临时能力ID跨播放沿用。
+
+用户选中外挂字幕或点击在线“下载并使用”并实际读取成功后，面板将 `{subtitle:{selection:{kind:'external',label,language?}}}` 保存到现有偏好API。只保存安全文件名，不保存 `external:...` 临时ID或NAS路径；传给 `tracks.selectExternal/selectAss` 的第二参数为 `{descriptor:option,isCurrent}`，供同片事务捕获和异步取消使用。服务已经接受这一严格白名单类型；下次播放由 `MediaTrackController.applyPreferences` 用当前 metadata 解析新ID。
+
+真实浏览器界面回归当前11项，增加外挂 descriptor 保存和 hydrate 换片清理两项。

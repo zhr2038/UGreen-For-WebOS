@@ -103,32 +103,46 @@
     if (!supported.supported) throw fail('ENCODER_UNSUPPORTED', '浏览器不支持请求的 UHD AVC 编码配置');
     return supported.config;
   }
-  async function encodeStill(original, { expectedWidth, expectedHeight, width = 3840, height = 2160, durationMs = 15000, fit = 'contain', signal, timeoutMs = 30000, codec, hardwareAcceleration, bitrate } = {}) {
+  async function encodeStill(original, { expectedWidth, expectedHeight, width = 3840, height = 2160, durationMs = 15000, fit = 'contain', signal, timeoutMs = 30000, codec, hardwareAcceleration, bitrate, decodeImage } = {}) {
     if (!(original instanceof Blob) || !original.size || original.size > 32 * 1024 * 1024) throw fail('SOURCE_TOO_LARGE', '原图为空或超过 32MB 编码上限');
     if (!['contain', 'cover'].includes(fit) || width !== 3840 || height !== 2160 || !Number.isSafeInteger(durationMs) || durationMs < 1000 || durationMs > 60000 || !Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000) throw fail('INVALID_OPTIONS', 'UHD 静态视频参数无效');
     checkPixels(expectedWidth, expectedHeight);
     if (signal?.aborted) throw new DOMException('Operation aborted', 'AbortError');
     const pipelineStarted = performance.now(), remaining = () => Math.max(1, timeoutMs - (performance.now() - pipelineStarted));
     const config = await encoderConfig({ codec, width, height, hardwareAcceleration, bitrate }, { signal, milliseconds: Math.min(3000, remaining()) });
-    let image, decoder, canvas, encoder, frame, timer, abortListener;
+    let image, decodedCleanup, decoder, canvas, encoder, frame, timer, abortListener;
     const started = performance.now();
     try {
-      const bytes = new Uint8Array(await bounded(original.arrayBuffer(), { milliseconds: remaining(), signal })), header = dimensions(bytes), mime = header?.mime || original.type.toLowerCase();
-      if (header) { checkPixels(header.width, header.height); if (!matches(header, expectedWidth, expectedHeight)) throw fail('SOURCE_DIMENSIONS_MISMATCH', '读取到的文件尺寸与原图不符，不能用预览图代替'); }
-      if (header && globalThis.createImageBitmap) image = await bounded(createImageBitmap(original, { imageOrientation: 'from-image' }), { milliseconds: remaining(), signal, late: image => image.close() });
-      else {
-        if (!globalThis.ImageDecoder?.isTypeSupported || !await bounded(ImageDecoder.isTypeSupported(mime), { milliseconds: remaining(), signal })) throw fail('IMAGE_DECODE_UNSUPPORTED', '浏览器不能解码这个原图格式，请保留系统查看器路径');
-        decoder = new ImageDecoder({ data: bytes, type: mime, preferAnimation: false });
-        image = (await bounded(decoder.decode({ frameIndex: 0, completeFramesOnly: true }), { milliseconds: remaining(), signal, late: result => result.image.close() })).image;
+      const prefix = new Uint8Array(await bounded(original.slice(0, 32).arrayBuffer(), { milliseconds: remaining(), signal })), brands = String.fromCharCode(...prefix), heif = /^image\/hei[cf](?:-sequence)?$/i.test(original.type) || brands.includes('ftyp') && /heic|heix|hevc|hevx/.test(brands);
+      let mime = original.type.toLowerCase(), decoded;
+      if (heif && typeof decodeImage === 'function') {
+        const closeDecoded = result => { if (typeof result?.close === 'function') result.close(); else result?.image?.close?.(); };
+        decoded = await bounded(decodeImage(original, { signal, expectedWidth, expectedHeight, targetWidth: width, targetHeight: height }), { milliseconds: remaining(), signal, late: closeDecoded });
+        if (!decoded?.image || decoded.orientationApplied !== true) { closeDecoded(decoded); throw fail('IMAGE_DECODE_UNSUPPORTED', '原图解码器没有返回完整图像方向信息'); }
+        image = decoded.image; decodedCleanup = () => closeDecoded(decoded); mime = heif ? 'image/heif' : mime;
+      } else {
+        const bytes = new Uint8Array(await bounded(original.arrayBuffer(), { milliseconds: remaining(), signal })), header = dimensions(bytes);
+        mime = header?.mime || (/avif|avis/.test(brands) ? 'image/avif' : heif ? 'image/heif' : mime);
+        if (header) { checkPixels(header.width, header.height); if (!matches(header, expectedWidth, expectedHeight)) throw fail('SOURCE_DIMENSIONS_MISMATCH', '读取到的文件尺寸与原图不符，不能用预览图代替'); }
+        if (header && globalThis.createImageBitmap) image = await bounded(createImageBitmap(original, { imageOrientation: 'from-image' }), { milliseconds: remaining(), signal, late: image => image.close() });
+        else {
+          if (!globalThis.ImageDecoder?.isTypeSupported || !await bounded(ImageDecoder.isTypeSupported(mime), { milliseconds: remaining(), signal })) throw fail('IMAGE_DECODE_UNSUPPORTED', '浏览器不能解码这个原图格式，请保留系统查看器路径');
+          decoder = new ImageDecoder({ data: bytes, type: mime, preferAnimation: false });
+          image = (await bounded(decoder.decode({ frameIndex: 0, completeFramesOnly: true }), { milliseconds: remaining(), signal, late: result => result.image.close() })).image;
+        }
       }
-      const sourceWidth = image.displayWidth || image.width, sourceHeight = image.displayHeight || image.height;
+      const inputWidth = image.displayWidth || image.width, inputHeight = image.displayHeight || image.height;
+      const sourceWidth = decoded ? decoded.sourceWidth : inputWidth, sourceHeight = decoded ? decoded.sourceHeight : inputHeight;
       checkPixels(sourceWidth, sourceHeight); if (!matches({ width: sourceWidth, height: sourceHeight }, expectedWidth, expectedHeight)) throw fail('SOURCE_DIMENSIONS_MISMATCH', '原图解码尺寸与 NAS 原图信息不符');
+      checkPixels(inputWidth, inputHeight);
+      if (Math.abs(inputWidth * sourceHeight - inputHeight * sourceWidth) > Math.max(sourceWidth, sourceHeight)) throw fail('SOURCE_DIMENSIONS_MISMATCH', '原图解码中间图像的比例不一致');
       if (signal?.aborted) throw new DOMException('Operation aborted', 'AbortError');
       canvas = new OffscreenCanvas(width, height); const ctx = canvas.getContext('2d', { alpha: false });
       if (!ctx) throw fail('CANVAS_UNAVAILABLE', '电视没有提供离屏图片绘制能力');
-      const scale = (fit === 'cover' ? Math.max : Math.min)(width / sourceWidth, height / sourceHeight), drawnWidth = sourceWidth * scale, drawnHeight = sourceHeight * scale;
+      const scale = (fit === 'cover' ? Math.max : Math.min)(width / inputWidth, height / inputHeight), drawnWidth = inputWidth * scale, drawnHeight = inputHeight * scale;
+      const originalScale = (fit === 'cover' ? Math.max : Math.min)(width / sourceWidth, height / sourceHeight);
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, width, height); ctx.drawImage(image, (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight);
-      image.close?.(); image = null; decoder?.close(); decoder = null;
+      if (decodedCleanup) { decodedCleanup(); decodedCleanup = null; } else image.close?.(); image = null; decoder?.close(); decoder = null;
       const chunks = []; let avcC, encodingError, encoderCodedWidth, encoderCodedHeight;
       let reportError; const failed = new Promise(resolve => { reportError = resolve; });
       encoder = new VideoEncoder({
@@ -150,10 +164,10 @@
       if (encodingError) throw encodingError;
       if (chunks.length !== 1 || !avcC) throw fail('INVALID_AVC', '编码器没有返回单帧 MP4 所需的信息');
       const output = muxAvcStill({ data: chunks[0], avcC, width, height, durationMs });
-      return { blob: new Blob([output], { type: 'video/mp4' }), report: { sourceMime: mime, sourceWidth, sourceHeight, sourceUpscaled: scale > 1, outputWidth: width, outputHeight: height, encoderCodedWidth, encoderCodedHeight, encodedDimensionsVerified: encoderCodedWidth === width && encoderCodedHeight === height, fit, encodedSamples: 1, containerSamples: 2, durationMs, codec: config.codec, hardwareAccelerationHint: config.hardwareAcceleration, outputBytes: output.length, elapsedMs: Math.round(performance.now() - started), colorPreservation: 'unverified-lossy-video', nativeUhdConfirmed: false } };
+      return { blob: new Blob([output], { type: 'video/mp4' }), report: { sourceMime: mime, sourceWidth, sourceHeight, sourceUpscaled: originalScale > 1, decodedIntermediateWidth: inputWidth, decodedIntermediateHeight: inputHeight, decoderScaled: Boolean(decoded?.scaled), intermediateUpscaled: scale > 1, orientationApplied: decoded ? decoded.orientationApplied : 'browser', outputWidth: width, outputHeight: height, encoderCodedWidth, encoderCodedHeight, encodedDimensionsVerified: encoderCodedWidth === width && encoderCodedHeight === height, fit, encodedSamples: 1, containerSamples: 2, durationMs, codec: config.codec, hardwareAccelerationHint: config.hardwareAcceleration, outputBytes: output.length, elapsedMs: Math.round(performance.now() - started), colorPreservation: 'unverified-lossy-video', nativeUhdConfirmed: false } };
     } finally {
       clearTimeout(timer); if (abortListener) signal?.removeEventListener('abort', abortListener);
-      frame?.close(); image?.close?.(); decoder?.close(); if (encoder && encoder.state !== 'closed') encoder.close(); if (canvas) { canvas.width = 1; canvas.height = 1; }
+      frame?.close(); if (decodedCleanup) decodedCleanup(); else image?.close?.(); decoder?.close(); if (encoder && encoder.state !== 'closed') encoder.close(); if (canvas) { canvas.width = 1; canvas.height = 1; }
     }
   }
   async function encodeOriginal(url, options) { return encodeStill(await fetchOriginal(url, { signal: options?.signal }), options); }

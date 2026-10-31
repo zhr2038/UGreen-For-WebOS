@@ -1,0 +1,93 @@
+{
+  "format": "cloudframe.aosp-runtime-provenance.v1",
+  "metadataUrl": "https://dl.google.com/android/repository/sys-img/android/sys-img2-1.xml",
+  "packagePath": "system-images;android-24;default;armeabi-v7a",
+  "archiveUrl": "https://dl.google.com/android/repository/sys-img/android/armeabi-v7a-24_r07.zip",
+  "archiveBytes": 283677512,
+  "archiveSha1": "3454546b4eed2d6c3dd06d47757d6da9f4176033",
+  "sdkLicenseRef": "android-sdk-license",
+  "buildFingerprint": "Android/sdk_phone_armv7/generic:7.0/NYC/3245079:userdebug/test-keys",
+  "buildPropSha256": "0f666c0c03d2f0fbc7e4df5e8ea2d6e28f44c4c649e08a4f9c654e1144e0f779",
+  "preciseSourceManifestVerified": false,
+  "reviewSourceBaseline": "android-7.0.0_r1 (not proved exact source of this prebuilt)",
+  "files": {
+    "linker": {
+      "size": 621708,
+      "sha256": "b9c6e172a16c5e1337cca905bc3457392e877ffc3b040e250929a5ca56afdaaa"
+    },
+    "libc.so": {
+      "size": 771876,
+      "sha256": "076861a228fd9c7a41c164d625b6141fd1e0c6d74b814b484e136dc3b64c2232"
+    },
+    "libdl.so": {
+      "size": 13708,
+      "sha256": "0ede9f6cf5fbee3fe31d093b13613db9561c382d5e7ad64e79f43b5f6541e8ff"
+    },
+    "libm.so": {
+      "size": 132780,
+      "sha256": "0b8893c6470034862bc571bf940bb65b7c31cedddfe91ea6578dc7a50efeb4e8"
+    },
+    "liblog.so": {
+      "size": 63432,
+      "sha256": "b523f127b429530ef141a19c735b9be09b19303009dc0212277b76866dd6112a"
+    },
+    "libz.so": {
+      "size": 91796,
+      "sha256": "6c70d44bc054e964da8fc36d325726a9505ea8d3a2becd688a2c15b9a86b14af"
+    },
+    "libstdc++.so": {
+      "size": 22116,
+      "sha256": "c323c21d79ad7ff798da99c7446f3fd3e742458652141f5eedf10eea75c8dec6"
+    }
+  },
+  "originalNoticeBytes": 1691261,
+  "originalNoticeSha256": "099c80c5c5d6b2e10b53bb88dbebf5c0b482ede2b9c3c0966482cf6c604b71b5",
+  "selectedNoticeBytes": 345480,
+  "selectedNoticeSha256": "4a6fc73769dee5ed3c2740633c19a2666161caca03bb56b2e3b56300bd33a0d5",
+  "selectedNoticeBlocks": [
+    {
+      "originalBlock": 19,
+      "paths": [
+        "/system/lib/liblog.so"
+      ],
+      "bytes": 10955
+    },
+    {
+      "originalBlock": 55,
+      "paths": [
+        "/system/lib/libc.so",
+        "/system/lib/libstdc++.so"
+      ],
+      "bytes": 268452
+    },
+    {
+      "originalBlock": 56,
+      "paths": [
+        "/system/lib/libz.so"
+      ],
+      "bytes": 1183
+    },
+    {
+      "originalBlock": 63,
+      "paths": [
+        "/system/bin/linker"
+      ],
+      "bytes": 8303
+    },
+    {
+      "originalBlock": 82,
+      "paths": [
+        "/system/lib/libdl.so"
+      ],
+      "bytes": 832
+    },
+    {
+      "originalBlock": 91,
+      "paths": [
+        "/system/lib/libm.so"
+      ],
+      "bytes": 55755
+    }
+  ],
+  "proprietarySdkIncluded": false
+}

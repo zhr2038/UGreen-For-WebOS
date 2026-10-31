@@ -97,5 +97,19 @@ test('old-task close failure reports uncertainty without rolling back a committe
   const videos = new PhotoVideoSessions(photos, { createSession: () => { const id = ++task; return { describe: async () => ({ qualities: [{ id: 'q' }] }), selectQuality: async () => ({ kind: 'hls', quality: { id: 'q' } }), close: async () => { if (id === 2) throw new Error('unknown close result'); } }; } });
   const root = await videos.start({ asset: 'key' }, 'one'); const first = await videos.quality({ id: root.id, quality: 'q' }, 'one'); await videos.commit({ id: root.id, candidate: first.candidate }, 'one');
   const next = await videos.quality({ id: root.id, quality: 'q' }, 'one'); const result = await videos.commit({ id: root.id, candidate: next.candidate }, 'one');
-  assert.equal(result.ok, true); assert.match(result.warning, /关闭未确认/); assert.equal(videos.sessions.get(root.id).active, next.candidate); assert.doesNotThrow(() => videos.hls(next.candidate, 'one')); await videos.clear();
+  assert.equal(result.ok, true); assert.match(result.warning, /关闭未确认/); assert.match(videos.active({ id: root.id }, 'one').warning, /关闭未确认/); assert.equal(videos.sessions.get(root.id).active, next.candidate); assert.doesNotThrow(() => videos.hls(next.candidate, 'one')); await videos.clear();
+});
+
+test('active reconciles atomic promotion before old cleanup completes and retains original candidate identity without NAS writes', async()=>{
+  let counter=0,release;const closed=[],gate=new Promise(resolve=>release=resolve),options={qualities:[{id:'original',label:'原画',original:true},{id:'q',label:'1080P'}]};
+  const photos={nas:{config:{}},get:()=>({kind:'video',source:{id:'8'}})};
+  const videos=new PhotoVideoSessions(photos,{createSession:()=>{const task=++counter;return{describe:async()=>options,selectQuality:async()=>({kind:'hls',quality:options.qualities[1]}),close:async()=>{closed.push(task);if(task===2)await gate;}};}});
+  try{
+    const root=await videos.start({asset:'authorized'},'one'),initial=videos.active({id:root.id},'one');assert.equal(initial.kind,'original');assert.equal(initial.candidate,null);assert.equal(initial.selected,'original');
+    const first=await videos.quality({id:root.id,quality:'q'},'one');await videos.commit({id:root.id,candidate:first.candidate},'one');const second=await videos.quality({id:root.id,quality:'q'},'one'),pending=videos.commit({id:root.id,candidate:second.candidate},'one');
+    const active=videos.active({id:root.id},'one');assert.equal(active.candidate,second.candidate);assert.equal(active.selected,'q');assert.equal(active.url,`/photo-hls/${second.candidate}/master`);assert.equal(active.kind,'hls');assert.throws(()=>videos.active({id:root.id},'other'),{status:404});assert.equal(counter,3,'A read-only state check must not prepare another NAS task');
+    release();await pending;
+    const original=await videos.quality({id:root.id,quality:'original'},'one');await videos.commit({id:root.id,candidate:original.candidate},'one');const restored=videos.active({id:root.id},'one');assert.equal(restored.candidate,original.candidate);assert.equal(restored.kind,'original');assert.equal(restored.selected,'original');assert.equal(restored.url,'/photo-video/authorized');assert.equal(videos.candidates.has(original.candidate),false);
+    await videos.close({id:root.id},'one');assert.throws(()=>videos.active({id:root.id},'one'),{status:404});
+  }finally{release();await videos.clear();}
 });

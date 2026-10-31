@@ -1,6 +1,9 @@
 .local/
 node_modules/
 app/qr.js
+app/playback.js
+app/heif-assets.js
+app/licenses/
 dist/
 .env
 .env.*

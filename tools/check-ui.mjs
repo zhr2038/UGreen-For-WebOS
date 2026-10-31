@@ -7,7 +7,8 @@ import sharp from 'sharp';
 
 const project = resolve(import.meta.dirname, '..');
 const cli = join(project, 'node_modules/@playwright/cli/playwright-cli.js');
-const session = 'cinema-regression-' + process.pid;
+const scenario = process.argv.includes('--photos') ? 'photo-gallery-ui' : 'ui-regression';
+const session = 'cinema-' + scenario + '-' + process.pid;
 const output = join(project, 'output/playwright');
 await mkdir(output, { recursive: true });
 await mkdir(join(project, '.local'), { recursive: true });
@@ -25,8 +26,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
 const base = `http://127.0.0.1:${server.address().port}`;
 const mockImage = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#225577' } }).png().toBuffer();
-const code = (await readFile(join(project, 'test/ui-regression.js'), 'utf8')).replace('__UI_BASE_URL__', base).replace('__UI_FILTER__', JSON.stringify(process.env.CINEMA_UI_FILTER || '')).replace('__UI_IMAGE_BASE64__', JSON.stringify(mockImage.toString('base64')));
-const runtime = join(project, '.local/ui-regression-runtime.js');
+const code = (await readFile(join(project, 'test', scenario + '.js'), 'utf8')).replace('__UI_BASE_URL__', base).replace('__UI_FILTER__', JSON.stringify(process.env.CINEMA_UI_FILTER || '')).replace('__UI_IMAGE_BASE64__', JSON.stringify(mockImage.toString('base64')));
+const runtime = join(project, '.local/' + scenario + '-runtime.js');
 await writeFile(runtime, code);
 let log = '';
 async function run(args) {
@@ -47,6 +48,6 @@ try {
 finally {
   await run(['close']);
   await new Promise(resolve => server.close(resolve));
-  await writeFile(join(output, 'ui-regression.log'), log);
+  await writeFile(join(output, scenario + '.log'), log);
 }
 process.exitCode = status;

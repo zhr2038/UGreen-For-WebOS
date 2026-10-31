@@ -103,3 +103,34 @@ LG 官方公开文档提供 [mediaOption](https://webostv.developer.lge.com/deve
 - 图形字幕 PGS / VobSub、强制解码方式与真正音频直通需要额外平台或媒体处理实现，普通 HTML 控件无法保证功能等价。
 
 `node --test test/playback-tracks.test.mjs` 通过 14 项离线测试，包含实际 setter / cue / CSS 操作、ASS 工厂与覆盖层生命周期、取消竞态、偏好隔离和可用轨道边界；这些测试没有被称为实机解码验收。
+## 同片切源和稳定偏好恢复
+
+后端 `options()` 现在附加 `preferenceScope`：64位 SHA-256 不透明账号/片目标识，不包含 NAS 路径、token 或根播放ID。根注入已有本机 `store.get/set` 后，加载选项时使用：
+
+```js
+tracks.setSource(data.preferenceScope, data);
+const applied = await tracks.applyPreferences(data.preferences || {}, {
+  metadata: data,
+  isCurrent: () => S.playback === playback && !playback.preferencesChanged,
+});
+```
+
+`applyPreferences()` 从稳定 `tracks.<scope>` 本机记录补齐服务器没有提供的字段，服务器显式字段优先。支持音轨、原生/关闭/外挂字幕、延迟、样式、速度和比例。外挂跨播放只保存 `{kind:'external',label,language?}`，通过新 session metadata 的文件名查找新的能力ID，绝不保存临时字幕ID、NAS路径或媒体URL。原生选择先匹配 label/language（支持 chi/zho/zh 等语言别名），再在真实 runtime 的完整轨道数匹配或只有合法索引偏好时使用有效 index；不使用 NAS PID。
+
+轨道还没有出现或 native setter 暂时不能工作时返回 `{pending:['audio'|'text',...]}`，在后续 loadedmetadata/addtrack 重试；不会制造轨道、等待无限 promise 或启动轮询。后台恢复采用逐字段手动 revision，用户较新的音轨、字幕、延迟、样式、倍速或比例操作优先。尚未完成的异步字幕 fetch/ASS renderer 还检查 isCurrent、source epoch 和操作 generation，迟到后取消并销毁渲染器。
+
+根质量事务在更换视频源前捕获，候选加载成功或旧源回滚加载完成后恢复：
+
+```js
+const saved = tracks.capture();
+await loadCandidateOrRestoreOldSource();
+await tracks.restore(saved, {
+  isCurrent: () => S.playback === playback && operationStillCurrent(),
+});
+```
+
+`capture()` 仅生成内存事务快照，包含当前实际音轨、native/external/ASS/off 字幕、offset/style/rate/fit、稳定scope和手动 revision。同一个影片的质量切换可在此快照中保留本次 session 字幕能力；`restore()` 不写任何 src、currentTime、onended 或播放进度。原生轨道索引重排时按描述重新选取；外部字幕继续复用一个 TextTrack。源 scope 不同、isCurrent 失败或用户已经做了新的选择时，旧恢复不会覆盖它，方法可安全返回 `{cancelled:true}`。
+
+根切源期间 `emptied` 会使旧请求和 cue 操作失效、保留scope；因此必须保留切源前的 capture，不能在 emptied 之后才捕获。`setSource()` 用于建立新片/账号边界；同片质量加载不必再次设置它。新 API 的 setter 成功仍不是声音、字幕画面或HDR验收。
+
+新增恢复回归覆盖同片索引重排、外挂 cue/style/offset、稳定标签换新ID、native 延后与 setter 重试、手动选择优先、跨账号拒绝、异步外置/ASS取消。`test/playback-tracks.test.mjs` 当前25项通过。

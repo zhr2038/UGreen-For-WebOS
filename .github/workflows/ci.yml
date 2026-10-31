@@ -53,6 +53,11 @@ jobs:
       - run: npx playwright-cli install-browser chrome
       - run: npm run test:ui
       - run: node test/run-artwork-ui.mjs
+      - run: node test/run-player-options-ui.mjs
+      - run: node test/run-heif-ui.mjs
+      - run: node test/run-photo-music-ui.mjs
+      - run: node test/run-photo-music-stream-ui.mjs
+      - run: node tools/check-ui.mjs --photos
 
   build-server:
     runs-on: ubuntu-latest
