@@ -3,9 +3,16 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {setTimeout as delay} from 'node:timers/promises';
+import {performance} from 'node:perf_hooks';
 const script=await readFile(new URL('../app/photo-music.js',import.meta.url),'utf8'),url='http://gateway.test/photo-music/'+ 'a'.repeat(40)+'?client=PRIVATE_LOCAL_TEST_CAP';
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{promise,resolve};};
-async function until(predicate){for(let i=0;i<100;i++){if(predicate())return;await delay(1);}throw new Error('state timeout');}
+async function until(predicate){
+  // The stream pump advances in 40ms batches. Reaching >100 outputs or several
+  // loops takes hundreds of ms; 100 nominal 1ms polls only passed on Windows
+  // because its timer granularity accidentally extended that budget.
+  const deadline=performance.now()+5000;
+  while(!predicate()){if(performance.now()>=deadline)throw new Error('state timeout after 5000ms');await delay(5);}
+}
 function fixture(extra={}){
   const tracker={fetches:0,decodes:0,contexts:[],sources:[],gain:null,decodeActive:0,decodeMaximum:0};
   class Context extends EventTarget {
