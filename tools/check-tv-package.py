@@ -4,6 +4,7 @@ import json
 import pathlib
 import re
 import struct
+import hashlib
 import sys
 import tarfile
 
@@ -34,11 +35,25 @@ for notice in ['HEIF-NOTICES.md', 'libde265-COPYING.txt', 'libheif-COPYING.txt',
 service = next(v for k, v in files.items() if k.endswith('/top.hrhome.nascinema.service/service.js'))
 assert b'ownerTest' not in service and b'qaCandidate' not in service and b'Invalid test capability' not in service
 assert b'require("sharp")' not in service and b'require("./' not in service
+native_prefix=next(k.rsplit('/',1)[0] for k in files if k.endswith('/native-assets/worker-manifest.json'))
+native={k.rsplit('/',1)[1]:value for k,value in files.items() if k.startswith(native_prefix+'/')}
+expected={'linker','libc.so','libdl.so','libm.so','liblog.so','libz.so','libstdc++.so','NOTICE.AOSP.txt','AOSP-RUNTIME-PROVENANCE.json','p2p-connect-worker','worker-manifest.json'}
+assert set(native)==expected, 'Native package contains unexpected or missing files'
+provenance=json.loads(native['AOSP-RUNTIME-PROVENANCE.json'])
+for name,pin in provenance['files'].items():
+    assert len(native[name])==pin['size'] and hashlib.sha256(native[name]).hexdigest()==pin['sha256'], name
+assert hashlib.sha256(native['NOTICE.AOSP.txt']).hexdigest()==provenance['selectedNoticeSha256']
+worker=json.loads(native['worker-manifest.json'])
+assert worker==json.loads((root/'native/worker-manifest.json').read_text())
+assert len(native['p2p-connect-worker'])==worker['size'] and hashlib.sha256(native['p2p-connect-worker']).hexdigest()==worker['sha256']
+assert native['p2p-connect-worker'][:5]==b'\x7fELF\x01' and struct.unpack_from('<H',native['p2p-connect-worker'],18)[0]==40
+assert b'worker-fpe' not in native['p2p-connect-worker'] and b'worker-divzero' not in native['p2p-connect-worker']
 for name in files:
     parts = pathlib.PurePosixPath(name).parts
     assert not any(p in {'.local', '.state', 'state', '_ares', 'node_modules'} for p in parts), name
     assert pathlib.PurePosixPath(name).name not in {'session.json', 'device-id', 'nas.json', 'clients.json', 'pair-code'}, name
+    assert pathlib.PurePosixPath(name).name not in {'libugagentsdk.so','libpgJniTunnel.so','private-configuration.json','owner-access.json','worker-fpe.h','worker-divzero.h'}, name
 for filename, expected in [(app['icon'], (80, 80)), (app['largeIcon'], (130, 130))]:
     png = next(v for k, v in files.items() if k.endswith('/applications/top.hrhome.nascinema/' + filename))
     assert png[:8] == b'\x89PNG\r\n\x1a\n' and struct.unpack('>II', png[16:24]) == expected
-print(json.dumps({'package': path.name, 'title': app['title'], 'version': app['version'], 'files': len(files), 'onDeviceService': True, 'privateStateAndDebugHooks': False}, ensure_ascii=True))
+print(json.dumps({'package': path.name, 'title': app['title'], 'version': app['version'], 'files': len(files), 'nativeFiles':len(native),'proprietarySdkIncluded':False,'workerSha256':worker['sha256'],'onDeviceService': True, 'privateStateAndDebugHooks': False}, ensure_ascii=True))

@@ -21,7 +21,7 @@ test('wrong NAS handshake prevents local alias auth and media request',async()=>
  const f=fixture({wrongIdentity:true});await assert.rejects(f.client.open('/ugreen/v1/stream/transcode/raw/get'),{code:'NATIVE_NAS_IDENTITY_MISMATCH'});assert.equal(f.calls.length,1);assert.equal(f.media(),0);f.client.close();
 });
 test('socket replacement prevents final authenticated HTTP write',async()=>{
- const f=fixture({replaceSocket:true});await assert.rejects(f.client.open('/ugreen/v1/user/info'),{code:'NATIVE_REQUEST_FAILED'});assert.equal(f.calls.length,2);f.client.close();
+ const f=fixture({replaceSocket:true});await assert.rejects(f.client.open('/ugreen/v1/user/info'),{code:'NATIVE_SOCKET_CHANGED'});assert.equal(f.calls.length,2);f.client.close();
 });
 test('media proof changes only for internally recognized raw media bytes',async()=>{
  const f=fixture();const response=await f.client.open('/ugreen/v1/stream/transcode/raw/get');assert.equal(f.media(),0);for await(const chunk of response)assert.ok(chunk.length);assert.equal(f.media(),1);f.client.close();
@@ -31,11 +31,11 @@ test('native client rejects mutation and caller-supplied token override without 
 });
 test('actual proof request primitive writes no authentication when pinned socket changes',async()=>{
  let ended=false;const wanted={destroyed:false};
- await assert.rejects(requestNas({server:'http://127.0.0.1:33445',path:'/ugreen/v1/user/priority_link',readAuth:account,auth:true,pinnedSocket:wanted,timeout:50},{request(){const req=new EventEmitter();req.end=()=>{ended=true;};req.setTimeout=()=>{};req.destroy=error=>queueMicrotask(()=>req.emit('error',error));queueMicrotask(()=>req.emit('socket',{destroyed:false}));return req;}}),{code:'NAS_REQUEST_FAILED'});assert.equal(ended,false);
+ await assert.rejects(requestNas({server:'http://127.0.0.1:33445',path:'/ugreen/v1/user/priority_link',readAuth:account,auth:true,pinnedSocket:wanted,timeout:50},{request(){const req=new EventEmitter();req.end=()=>{ended=true;};req.setTimeout=()=>{};req.destroy=error=>queueMicrotask(()=>req.emit('error',error));queueMicrotask(()=>req.emit('socket',{destroyed:false}));return req;}}),{code:'PROXY_SOCKET_CONTINUITY'});assert.equal(ended,false);
 });
 test('four synchronous reservations bound concurrent deferred route proofs',async()=>{
  let resume;const gate=new Promise(resolve=>resume=resolve),f=fixture();f.client.assertRoute=()=>gate;
- const work=Array.from({length:5},()=>f.client.open('/ugreen/v1/user/info'));const fifth=assert.rejects(work[4],{code:'NATIVE_READ_ONLY'});
+ const work=Array.from({length:5},()=>f.client.open('/ugreen/v1/user/info'));const fifth=assert.rejects(work[4],{code:'NATIVE_CONNECTION_LIMIT'});
  assert.equal(f.client.agents.size,4);assert.equal(f.calls.length,0);resume();await fifth;
  const responses=await Promise.all(work.slice(0,4));for(const response of responses)for await(const chunk of response)assert.ok(chunk.length);
  assert.equal(f.client.agents.size,0);f.client.close();
@@ -43,4 +43,15 @@ test('four synchronous reservations bound concurrent deferred route proofs',asyn
 test('failed route proof releases a reserved slot before any local HTTP',async()=>{
  const f=fixture();f.client.assertRoute=async()=>{throw Object.assign(new Error('fake'),{code:'NATIVE_ROUTE_CHANGED'});};
  await assert.rejects(f.client.open('/ugreen/v1/user/info'),{code:'NATIVE_ROUTE_CHANGED'});assert.equal(f.client.agents.size,0);assert.equal(f.calls.length,0);f.client.close();
+});
+test('numeric and arbitrary provider errors release reservations and expose only a finite client code',async()=>{
+ for(const code of [12,'NATIVE_PRIVATE_TOKEN_SUFFIX']){const f=fixture();f.client.assertRoute=async()=>{throw Object.assign(new Error('private'),{code});};await assert.rejects(f.client.open('/ugreen/v1/user/info'),{code:'NATIVE_VERIFICATION_FAILED'});assert.equal(f.client.agents.size,0);f.client.close();}
+});
+test('already aborted caller creates no slot, proof or local request and does not close the client',async()=>{
+ const f=fixture(),controller=new AbortController();controller.abort();await assert.rejects(f.client.open('/ugreen/v2/video/getImaStream',{signal:controller.signal}),{name:'AbortError',code:'ABORT_ERR'});assert.equal(f.calls.length,0);assert.equal(f.client.agents.size,0);assert.equal(f.client.closed,false);f.client.close();
+});
+test('known integrity failure in the same turn outranks caller cancellation',async()=>{
+ for(const code of ['NATIVE_NAS_IDENTITY_MISMATCH','NATIVE_ACCOUNT_MISMATCH','NATIVE_LISTENER_UNVERIFIED','PROXY_SOCKET_CONTINUITY']){
+  const f=fixture(),controller=new AbortController();f.client.requestProof=async()=>{controller.abort();throw Object.assign(new Error('private'),{code});};await assert.rejects(f.client.open('/ugreen/v2/video/getImaStream',{signal:controller.signal}),{code:code==='PROXY_SOCKET_CONTINUITY'?'NATIVE_SOCKET_CHANGED':code});assert.equal(f.client.agents.size,0);f.client.close();
+ }
 });

@@ -34,6 +34,11 @@ test('allowlist and explicit trusted directory reject traversal, roots, installa
 test('missing files stay optional; repeated atomic writes and malformed payload reads preserve Windows-compatible semantics',async t=>{
   const f=await fixture(t);assert.equal(await f.store.read('session.json'),null);await f.store.write('session.json','one');await f.store.write('session.json','two');assert.equal(await f.store.read('session.json'),'two');assert.deepEqual((await fs.readdir(f.dir)).sort(),['session.json']);const report=await f.store.repair();assert.equal(report.posixProtected,posix);if(!posix){assert.equal(report.directoryMode,null);assert.equal(report.fileMode,null);}
 });
+test('explicit allowlisted plus-containing runtime filename supports real filesystem writes without allowing traversal',async t=>{
+ const f=await fixture(t),store=createPrivateState({dir:f.dir,trustedDir:f.dir,files:['libstdc++.so']});await store.write('libstdc++.so',Buffer.from('synthetic runtime bytes'));assert.equal(await store.read('libstdc++.so'),'synthetic runtime bytes');await store.write('libstdc++.so','second bytes');assert.equal(await store.read('libstdc++.so'),'second bytes');
+ for(const name of ['../libstdc++.so','sub/libstdc++.so','sub\\libstdc++.so','/libstdc++.so','..','.',String.fromCharCode(0)+'libstdc++.so'])assert.throws(()=>createPrivateState({dir:f.dir,trustedDir:f.dir,files:[name]}),privateFailure);
+ await assert.rejects(store.read('other++.so'),privateFailure);if(posix){assert.equal(await mode(f.dir),0o700);assert.equal(await mode(join(f.dir,'libstdc++.so')),0o600);}
+});
 
 test('hardlinked credentials are rejected before their content, modes or external alias can be changed',async t=>{
   const f=await fixture(t),outside=join(f.base,'other');await fs.writeFile(outside,'outside');if(posix)await fs.chmod(outside,0o664);await fs.link(outside,join(f.dir,'session.json'));await assert.rejects(f.store.repair(),privateFailure);await assert.rejects(f.store.write('session.json','replacement'),privateFailure);assert.equal(await fs.readFile(outside,'utf8'),'outside');if(posix)assert.equal(await mode(outside),0o664);

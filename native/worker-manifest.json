@@ -1,10 +1,10 @@
 {
   "format": "cloudframe.native-worker.v1",
   "name": "p2p-connect-worker",
-  "size": 33612,
-  "sha256": "44ea50a713656afd2e1955ade4c52305f410420d3d3fafa4e0a1f21fb7ec00b6",
-  "sourceSha256": "2fa147ec41432de5fa28b65437ac89ce5e4a62f77f988f170ab0e4f9f56455dd",
-  "headerSha256": "c284707ac21701ce4c5427e38de6a5aabe194765ae7f6a12637be1299598d6e9",
+  "size": 11468,
+  "sha256": "c64d6d3e3c28deb4a0e6b0d869b2f9f56ec98da1c74dd249796981b9ed7c91b6",
+  "sourceSha256": "0d8856a6227bc997e57a0b799991328eafb022f1820c2db7906ab39beee05e19",
+  "headerSha256": "fd5a3431a76ed985ced1d7e66276970ef4a43d0c641fd827d069aad160bfc3bf",
   "protocol": "CFUGW002",
   "budgets": {
     "cpuSeconds": 3600,

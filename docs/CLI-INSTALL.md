@@ -34,7 +34,7 @@ ares-device.cmd --system-info --device lg-living-room
 
 ## 3. 安装并启动
 
-从 [v0.4.1](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.1)下载 `CloudFrame.ipk`，进入下载目录后执行：
+从 [v0.5.0](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.5.0)下载 `CloudFrame.ipk`，进入下载目录后执行：
 
 ```powershell
 cd "$env:USERPROFILE\Downloads"

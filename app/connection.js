@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  window.createDirectLogin = ({ root, esc, store, bind, focus, connected, bridgeMode, back }) => {
+  window.createDirectLogin = ({ root, esc, store, bind, focus, connected, disconnected = () => {}, bridgeMode, back }) => {
     const C = { gateway: null, status: null, generation: 0, timer: null, active: false, subscription: null };
     const $ = s => root.querySelector(s);
     async function request(path, data) {
@@ -22,7 +22,7 @@
       bind(); $('#login-password-tab').onclick = () => show('password'); $('#login-qr-tab').onclick = () => show('qr');
       $('#legacy-mode').onclick = () => { leave(); bridgeMode(); };
       if ($('#direct-back')) $('#direct-back').onclick = () => { leave(); back(); };
-      if ($('#direct-logout')) $('#direct-logout').onclick = async () => { try { await request('logout', {}); C.status = { connected: false }; show(); } catch (e) { $('#direct-message').textContent = e.message; } };
+      if ($('#direct-logout')) $('#direct-logout').onclick = async () => { try { await request('logout', {}); disconnected(); C.status = { connected: false }; show(); } catch (e) { $('#direct-message').textContent = e.message; } };
     }
     async function success(generation) {
       if (!C.active || generation !== C.generation) return;

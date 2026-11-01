@@ -44,6 +44,7 @@ async page => {
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization,Content-Type' } });
     const call = { path: url.pathname, host: url.host, query: url.search, authorization: request.headers().authorization, body: request.postDataJSON() }; state.calls.push(call);
     if (url.pathname === '/api/connection') { const status = state.connectionStatus || { mode: 'ugreenlink-relay', verified: false, probing: false }; const gate = state.connectionGate; if (gate) await gate.promise; return response(route, status, state.connectionHttpStatus || 200); }
+    if(url.pathname==='/api/connection/visibility'){if(call.body?.visible&&state.visibilityGate)await state.visibilityGate.promise;if(call.body?.visible&&state.nativeStartsOnVisible){state.connectionStatus={...state.connectionStatus,probing:true};setTimeout(()=>{state.connectionStatus={...state.connectionStatus,mode:'native-p2p',verified:true,authenticated:true,probing:false};},300);}return response(route,{ok:true});}
     if (url.pathname === '/api/direct/status') return response(route, { connected: Boolean(state.directConnected), alias: 'example', username: 'viewer' });
     if (url.pathname === '/api/direct/login') { if (state.directLoginGate) await state.directLoginGate.promise; if (state.directFail) return response(route, { error: 'NAS 用户名或密码错误' }, 401); state.directConnected = true; return response(route, { connected: true }); }
     if (url.pathname === '/api/direct/qr/create') return response(route, { url: 'https://www.ugnas.com/scan?example=1', expiresAt: Date.now() + 60000, interval: 60 });
@@ -52,7 +53,7 @@ async page => {
     if (url.pathname === '/api/direct/logout') { state.directConnected = false; return response(route, { connected: false }); }
     if (url.pathname === '/api/direct/cancel') return response(route, { ok: true });
     if (url.host.startsWith('bad-nas.test')) return response(route, { error: '配对码错误' }, 401);
-    if (url.pathname === '/api/home') return response(route, { accountScope: state.accountScope || 'account-A', name: '测试 NAS', connection: 'UGREENlink 中继', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
+    if (url.pathname === '/api/home') return response(route, { connectionScope:state.connectionScope||'owner-A',accountScope: state.accountScope || 'account-A', name: '测试 NAS', connection: 'UGREENlink 中继', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
     if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; return response(route, { items: Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1)), total: 120, last: n >= 2 }); }
     if (url.pathname === '/api/detail') return response(route, { item: movie(Number(url.searchParams.get('id'))), files: [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }], actors: [], technical: { container: 'mp4', video_info: { codec: 'h264', resolution: '1920x1080' }, audio_info: [] } });
     if (url.pathname === '/api/play') { const gate = state.playGate; if (gate) await gate.promise; if (state.playError) return response(route, { error: '无法打开版本' }, 503); const id = 'play-' + (++state.playId); return response(route, { id, stream: '/media/' + id, fileIndex: call.body.fileIndex || 0, title: '测试播放', position: call.body.restart ? 0 : 120, duration: 3600, technical: {} }); }
@@ -251,6 +252,40 @@ async page => {
     await page.waitForFunction(() => document.querySelector('.connection')?.textContent.includes('中继'));
     gate.resolve(); await delay(200);
     check((await page.locator('.connection').textContent()).includes('中继'), 'Old account LAN result polluted the new account');
+  });
+  await run('原生P2P标签只采信已认证路由且隐藏后不续可见租约',async()=>{
+    const gate=deferred();control.gates.push(gate);control.visibilityGate=gate;
+    control.connectionStatus={mode:'native-p2p',verified:true,authenticated:true,mediaReadVerified:false,probing:false,nativeEnabled:true,visibilityScope:'owner-A',accountScope:'account-A'};
+    await connectDirectHome();await page.waitForFunction(()=>document.querySelector('.connection')?.textContent.includes('原生P2P直连'));
+    while(!control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible))await delay(10);
+    await page.evaluate(()=>{window.__visibleTimerCount=0;const original=window.setTimeout;window.setTimeout=function(fn,ms,...args){if(ms===30000)window.__visibleTimerCount++;return original(fn,ms,...args);};Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+    while(!control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible===false))await delay(10);const statusReads=control.calls.filter(c=>c.path==='/api/connection').length;gate.resolve();await delay(100);check(control.calls.filter(c=>c.path==='/api/connection').length===statusReads,'Late hidden pulse revived status reads');
+    check(await page.evaluate(()=>window.__visibleTimerCount)===0,'Late visible response scheduled a hidden heartbeat');
+    const hidden=control.calls.find(c=>c.path==='/api/connection/visibility'&&c.body.visible===false);check(hidden.body.scope==='owner-A'&&hidden.body.accountScope==='account-A','Hidden request lost its captured owner/account scope');
+  });
+  await run('首次可见脉冲启动原生后无需其他API也会及时更新标签且不动焦点滚动',async()=>{
+    const gate=deferred();control.gates.push(gate);control.visibilityGate=gate;control.nativeStartsOnVisible=true;
+    control.connectionStatus={mode:'ugreenlink-relay',verified:false,authenticated:false,probing:false,nativeEnabled:true,visibilityScope:'owner-A',accountScope:'account-A'};
+    await connectDirectHome();while(!control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible))await delay(10);
+    await page.locator('[data-route="home"]').focus();await page.locator('.screen').evaluate(el=>el.scrollTop=500);await page.waitForFunction(()=>document.querySelector('.header')?.getAttribute('aria-hidden')==='true');const scroll=await page.locator('.screen').evaluate(el=>el.scrollTop);
+    gate.resolve();await page.waitForFunction(()=>document.querySelector('.connection')?.textContent.includes('原生P2P直连'),undefined,{timeout:2000});
+    check(await page.locator('.header').getAttribute('aria-hidden')==='true','Forced connection refresh exposed header');check(await page.evaluate(()=>document.activeElement.dataset.route)==='home','Forced refresh stole focus');check(await page.locator('.screen').evaluate(el=>el.scrollTop)===scroll,'Forced refresh changed scroll');
+    const count=control.calls.filter(c=>c.path==='/api/connection').length;await delay(1100);check(control.calls.filter(c=>c.path==='/api/connection').length===count,'Forced refresh became an endless poll');check(control.calls.filter(c=>c.path==='/api/connection/visibility'&&c.body.visible).length===1,'Status reread recursively renewed visibility');
+  });
+  await run('活动探测中的可见刷新只排队一次且完成后停止轮询',async()=>{
+    const gate=deferred();control.gates.push(gate);control.visibilityGate=gate;control.nativeStartsOnVisible=true;
+    control.connectionStatus={mode:'ugreenlink-relay',verified:false,authenticated:false,probing:true,nativeEnabled:true,visibilityScope:'owner-A',accountScope:'account-A'};
+    await connectDirectHome();while(!control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible))await delay(10);gate.resolve();await page.waitForFunction(()=>document.querySelector('.connection')?.textContent.includes('原生P2P直连'),undefined,{timeout:2000});
+    await delay(100);const count=control.calls.filter(c=>c.path==='/api/connection').length;check(count<=4,'Forced refresh queued more than one follow-up');await delay(1150);check(control.calls.filter(c=>c.path==='/api/connection').length===count,'Queued refresh did not terminate');check(control.calls.filter(c=>c.path==='/api/connection/visibility'&&c.body.visible).length===1,'Queued read recursively sent visibility');
+  });
+  await run('旧账号迟到的可见脉冲不能强制刷新或污染新账号标签',async()=>{
+    const gate=deferred();control.gates.push(gate);control.visibilityGate=gate;
+    control.connectionStatus={mode:'lan-https',verified:true,probing:false,nativeEnabled:true,visibilityScope:'owner-A',accountScope:'account-A'};
+    await connectDirectHome();while(!control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible))await delay(10);
+    await page.locator('[data-route="settings"]').click();await page.waitForSelector('#direct-logout');await page.locator('#direct-logout').click();await page.waitForSelector('#direct-password');const logoutDeadline=Date.now()+1000;while(!control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible===false)&&Date.now()<logoutDeadline)await delay(10);check(control.calls.some(c=>c.path==='/api/connection/visibility'&&c.body.visible===false),'Logout failed to release the old visible lease');
+    control.accountScope='account-B';control.connectionScope='owner-B';control.connectionStatus={mode:'ugreenlink-relay',verified:false,probing:false,nativeEnabled:false,visibilityScope:'owner-B',accountScope:'account-B'};
+    await page.locator('#direct-alias').fill('new-account');await page.locator('#direct-user').fill('viewer');await page.locator('#direct-password').fill('new-test-password');await page.locator('#direct-form button[type="submit"]').click();await page.waitForSelector('button[data-primary][data-item]');await delay(100);
+    const count=control.calls.filter(c=>c.path==='/api/connection').length;gate.resolve();await delay(200);check(control.calls.filter(c=>c.path==='/api/connection').length===count,'Old visible pulse forced a new owner status read');check((await page.locator('.connection').textContent()).includes('中继'),'Old pulse polluted new owner label');
   });
   await run('电视直连账号登录通过本机服务，不保存 NAS 密码', async () => {
     await directLogin(); await page.locator('#direct-alias').fill('example'); await page.locator('#direct-user').fill('viewer'); await page.locator('#direct-password').fill('private-test-password');

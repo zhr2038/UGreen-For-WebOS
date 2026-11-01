@@ -50,10 +50,21 @@
       const res = await fetch(connection.server + path, { method: data ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + connection.token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined, signal: controller.signal });
       const result = await res.json(); if (!res.ok) throw new Error(result.error || '连接失败');
       if (path.startsWith('/api/play/options?')) { const p = S.playback; if (p && new URL(path, 'http://app').searchParams.get('id') === p.id) initializePlaybackOptions(p, result).catch(() => {}); }
-      if (path !== '/api/connection' && connection.server === S.server && connection.token === S.token) refreshConnection();
+      if (!path.startsWith('/api/connection') && connection.server === S.server && connection.token === S.token) refreshConnection();
       return result;
     } catch (error) { if (error.name === 'AbortError' && timedOut) throw new Error('连接超时，请检查电视和 NAS 的网络'); throw error; }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  }
+  let foregroundLease;
+  function stopForegroundLease(hidden=false){const lease=foregroundLease;foregroundLease=null;if(!lease)return;clearTimeout(lease.timer);if(hidden)api('/api/connection/visibility',{visible:false,scope:lease.scope,accountScope:lease.accountScope},undefined,lease.connection).catch(()=>{});}
+  function renewForegroundLease(status,home,connection){
+    if(!status.nativeEnabled||!home.connectionScope||status.visibilityScope!==home.connectionScope||status.accountScope!==home.accountScope||document.hidden||connectionMode!=='direct')return;
+    if(foregroundLease?.scope===status.visibilityScope&&foregroundLease.home===home)return;
+    stopForegroundLease();const lease={scope:status.visibilityScope,accountScope:home.accountScope,home,connection};foregroundLease=lease;
+    async function renew(){if(foregroundLease!==lease||document.hidden||connectionUnloaded||connectionMode!=='direct'||S.server!==connection.server||S.token!==connection.token||S.home!==home){if(foregroundLease===lease)stopForegroundLease();return;}
+      try{await api('/api/connection/visibility',{visible:true,scope:lease.scope,accountScope:lease.accountScope},undefined,connection);if(foregroundLease===lease)refreshConnection(true);}catch{if(foregroundLease===lease)stopForegroundLease();return;}
+      if(foregroundLease===lease&&!document.hidden)lease.timer=setTimeout(renew,30000);
+    }renew();
   }
   let connectionCheck, connectionCheckedHome, connectionCheckedAt = 0, connectionUnloaded = false;
   function cancelConnectionCheck(reset = false) {
@@ -61,22 +72,24 @@
     if (check) { clearTimeout(check.timer); clearTimeout(check.deadline); check.controller?.abort(); }
     if (reset) { connectionCheckedHome = null; connectionCheckedAt = 0; }
   }
-  function refreshConnection() {
+  function refreshConnection(force=false) {
     if (connectionUnloaded || !window.PalmServiceBridge || connectionMode !== 'direct' || document.hidden || !S.home) return;
     if (connectionCheck && (connectionCheck.home !== S.home || connectionCheck.server !== S.server || connectionCheck.token !== S.token)) cancelConnectionCheck(true);
-    if (connectionCheck || (connectionCheckedHome === S.home && Date.now() - connectionCheckedAt < 10000)) return;
+    if(connectionCheck){if(force)connectionCheck.refreshAfter=true;return;}
+    if(!force&&connectionCheckedHome===S.home&&Date.now()-connectionCheckedAt<10000)return;
     const check = { home: S.home, server: S.server, token: S.token, started: Date.now() };
     connectionCheck = check; connectionCheckedHome = S.home; connectionCheckedAt = check.started;
     const current = () => connectionCheck === check && !document.hidden && !connectionUnloaded && connectionMode === 'direct' && check.home === S.home && check.server === S.server && check.token === S.token;
-    const stop = () => { if (connectionCheck === check) cancelConnectionCheck(); };
+    const stop = () => { if(connectionCheck!==check)return;const refreshAfter=check.refreshAfter&&current();cancelConnectionCheck();if(refreshAfter)refreshConnection(true); };
     check.deadline = setTimeout(stop, 12000);
     async function read() {
       if (!current()) { stop(); return; }
       check.controller = new AbortController();
       try {
-        const status = await api('/api/connection', undefined, check.controller.signal, { server: check.server, token: check.token });
+        const status = await api('/api/connection?owner='+encodeURIComponent(check.home.connectionScope||'')+'&accountScope='+encodeURIComponent(check.home.accountScope||''), undefined, check.controller.signal, { server: check.server, token: check.token });
         if (!current()) { stop(); return; }
-        check.home.connection = status.mode === 'lan-https' && status.verified === true ? '局域网直连' : 'UGREENlink 中继';
+        renewForegroundLease(status,check.home,{server:check.server,token:check.token});
+        check.home.connection = status.mode === 'native-p2p' && status.verified === true && status.authenticated === true ? '原生P2P直连' : status.mode === 'lan-https' && status.verified === true ? '局域网直连' : 'UGREENlink 中继';
         const label = $('.header .connection');
         if (label) label.textContent = (check.home.name || '绿联 NAS') + ' · ' + check.home.connection;
         if (status.probing === true && Date.now() - check.started < 11000) check.timer = setTimeout(read, 1000);
@@ -553,7 +566,7 @@
   });
   document.addEventListener('mousemove', () => { if (S.route === 'player') showControls(); });
   root.addEventListener('focusin', () => { if (root.contains(document.activeElement) && !document.activeElement.closest('.nav')) { S.lastContentFocus = document.activeElement; artwork.prioritize(document.activeElement.querySelector('img[data-art-kind]')); } const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
-  addEventListener('beforeunload', () => { connectionUnloaded = true; cancelConnectionCheck(); clearHeaderScroll(); artwork.destroy(); });
+  addEventListener('beforeunload', () => { connectionUnloaded = true;stopForegroundLease(true); cancelConnectionCheck(); clearHeaderScroll(); artwork.destroy(); });
   video.addEventListener('loadedmetadata', () => { if (S.route !== 'player') return; if (!movieMedia.switching()) { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updatePlayerInfo(); } updateProgress(); });
   video.addEventListener('timeupdate', () => {
     if (S.route !== 'player') return;
@@ -573,12 +586,13 @@
     if (next !== null) play(true, S.detail.files[next].index); else { toast('播放结束'); showControls(); }
   });
   video.addEventListener('error', () => { if (S.route === 'player' && !movieMedia.switching()) playerError('电视无法播放这个片源。可能是音视频编码或封装格式不受支持。'); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelConnectionCheck(); else refreshConnection(); if (document.hidden && S.route === 'player') { video.pause(); reportProgress(true); } });
+  document.addEventListener('visibilitychange', () => { if(document.hidden)stopForegroundLease(true);if (document.hidden) cancelConnectionCheck(); else refreshConnection(); if (document.hidden && S.route === 'player') { video.pause(); reportProgress(true); } });
   function resize() { const scale = Math.min(innerWidth / 1920, innerHeight / 1080); $('#stage').style.transform = `scale(${scale})`; $('#stage').style.left = ((innerWidth - 1920 * scale) / 2) + 'px'; $('#stage').style.top = ((innerHeight - 1080 * scale) / 2) + 'px'; }
   addEventListener('resize', resize); resize();
   directAuth = window.createDirectLogin({ root, esc, store, bind, focus,
-    connected(gateway, status) { cancelConnectionCheck(true); photoGallery.reset(); artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
-    bridgeMode() { cancelConnectionCheck(true); connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
+    disconnected(){stopForegroundLease(true);cancelConnectionCheck(true);S.home=null;},
+    connected(gateway, status) { stopForegroundLease(true);cancelConnectionCheck(true); photoGallery.reset(); artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
+    bridgeMode() { stopForegroundLease(true); cancelConnectionCheck(true); connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
     back: home,
   });
   if (directAuth.available && connectionMode !== 'bridge') {
