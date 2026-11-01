@@ -82,19 +82,27 @@
       if (!same(generation)) return;
       S.options = result; if (result.preferences && !current()?.preferencesChanged) { S.preferences = { ...S.preferences, ...result.preferences, subtitle: { ...S.preferences.subtitle, ...result.preferences.subtitle } }; }
     }
-    async function open(page = 'settings') {
+    async function open(page = 'settings', { backToPlayer = false } = {}) {
       const p = current(); if (!p || !host()) return;
       resetPlayback(p); abort();
-      S.active = true; S.page = page; S.focusTarget = null; S.message = ''; S.abort = new AbortController(); const generation = S.generation; render();
+      S.active = true; S.page = page; S.returnToPlayerPage = backToPlayer ? page : null; S.focusTarget = null; S.message = ''; S.abort = new AbortController(); const generation = S.generation; render();
       if (['quality','subtitles','manage'].includes(page) && !S.options) {
         S.busy = true; S.message = '正在读取可用选项…'; render();
-        try { await ensureOptions(generation); if (same(generation)) S.message = ''; }
+        let loaded = false;
+        try { await ensureOptions(generation); if (same(generation)) { loaded = true; S.message = ''; } }
         catch (error) { if (same(generation)) S.message = '读取失败：' + error.message; }
-        finally { if (same(generation)) { S.busy = false; render(); } }
+        finally {
+          if (same(generation)) {
+            S.busy = false; render();
+            // Loading leaves only Back enabled. Its old numeric position must
+            // not select a different quality when the NAS list arrives.
+            if (loaded && S.page === 'quality') focus(find('[data-po-action="quality"][aria-pressed="true"]:not(:disabled)') || find('[data-po-action="quality"]:not(:disabled)'));
+          }
+        }
       }
     }
     async function run(action, value) {
-      if (!S.active || S.busy) return; if (action === 'open') return open(value); if (action === 'reload') { S.options = null; return open(S.page); }
+      if (!S.active || S.busy) return; if (action === 'open') return open(value); if (action === 'reload') { S.options = null; return open(S.page, { backToPlayer: S.returnToPlayerPage === S.page }); }
       if (action === 'confirm-delete') { S.deleteItem = S.options?.subtitles?.find(s => s.id === value && s.kind === 'external'); if (S.deleteItem) return open('confirmDelete'); return; }
       const generation = S.generation; S.focusTarget = { page: S.page, action, value }; S.busy = true; S.message = ''; render();
       try {
@@ -152,7 +160,7 @@
         finally { if (same(generation)) { S.busy = false; render(); } }
       };
     }
-    function back() { if (!S.active) return false; if (S.page === 'settings') close(); else open(['subtitleStyle','language','online','manage'].includes(S.page) ? 'subtitles' : S.page === 'confirmDelete' ? 'manage' : 'settings'); return true; }
+    function back() { if (!S.active) return false; if (S.page === 'settings' || S.page === S.returnToPlayerPage) close(); else open(['subtitleStyle','language','online','manage'].includes(S.page) ? 'subtitles' : S.page === 'confirmDelete' ? 'manage' : 'settings'); return true; }
     function key(event) {
       if (!S.active) return false;
       const active = document.activeElement;

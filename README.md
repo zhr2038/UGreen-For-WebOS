@@ -2,9 +2,9 @@
 
 在 LG 电视上使用绿联 NAS 的影视中心和相册：海报墙、影片资料、收藏、继续观看、照片浏览和幻灯片。
 
-**v0.4.0 支持 UGREENlink 直接登录、NAS 动态画质、字幕设置和 4K 照片查看，NAS 不需要安装 Docker 容器。** 输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
+**v0.4.1 修复局域网连接恢复、首页滚动与遥控返回，并增加播放栏画质入口。** 支持 UGREENlink 直接登录、NAS 动态画质、字幕设置和 4K 照片查看，NAS 不需要安装 Docker 容器。输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
 
-**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.0) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [本版更新](docs/CHANGELOG-0.4.0.md) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
+**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.1) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [本版更新](docs/BUGFIX-0.4.1.md) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
 
 个人使用的非官方客户端，与绿联、LG 没有官方合作关系。项目使用未公开 UGOS 接口，固件或手机 App 升级后可能需要适配。
 
@@ -19,14 +19,14 @@
 
 与 0.2.x 不同，登录、接口访问、海报缓存、视频转发和播放记录同步都由电视 App 随附的 JS 服务完成。**无需 NAS 兼容服务地址，也无需六位 NAS 配对码。**
 
-同一家庭网络优先选择经过证书和 NAS 身份校验的 **HTTPS 局域网直连**；其他网络或验证失败时使用绿联官方的 **UGREENlink HTTPS 中继**。电视和 NAS 可以不在同一局域网，无需在路由器上手动映射 8780 端口。**原生 P2P 加速留待后续版本，本版不启用。** 远程播放的流畅度取决于带宽、所选画质和绿联中继能力。
+同一家庭网络优先选择经过证书和 NAS 身份校验的 **HTTPS 局域网直连**；其他网络或验证失败时使用绿联官方的 **UGREENlink HTTPS 中继**。电视和 NAS 可以不在同一局域网，无需在路由器上手动映射 8780 端口。**原生 P2P 加速留待后续版本，本版不启用。** 连接验证在后台进行，不阻塞首页；局域网暂时不可用或掉线后，后续浏览会按冷却时间重新尝试，成功后页头自动更新连接状态。远程播放的流畅度取决于带宽、所选画质和绿联中继能力。
 
 <a id="second-tv"></a>
 ## 给另一台 LG 电视安装
 
 ### 1. 下载电视安装包
 
-在电脑打开 [v0.4.0 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.0)，下载：
+在电脑打开 [v0.4.1 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.4.1)，下载：
 
 ```text
 CloudFrame.ipk
@@ -34,7 +34,7 @@ CloudFrame.ipk
 
 安装包文件名为 **CloudFrame.ipk**，电视首页的中文应用名为 **云映**。使用 UGREENlink 登录时不需要下载服务端 ZIP，也不需要编译源码。
 
-**v0.4.0 电视端要求 Node.js 20 运行时，当前支持基线为 webOS 26。** 实机验证机型是 LG C5（OLED42C5PCA.ACNQLJD，固件 43.21.96、SDK 11.2.0、Node.js 20.12.2）。webOS 24 / 25 的 Node 16 缺少新版相册所用的取消 API，不能直接视为本版支持；旧电视可先保留 [v0.3.1](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，其整机兼容性也需按型号验证。4K 照片还需要电视实际支持 WebCodecs 编码，普通预览不依赖这项能力。运行时版本可查 [LG 官方说明](https://webostv.developer.lge.com/develop/guides/js-service-basics)。本项目不是 Android APK，不支持 NetCast 电视。
+**v0.4.1 电视端要求 Node.js 20 运行时，当前支持基线为 webOS 26。** 实机验证机型是 LG C5（OLED42C5PCA.ACNQLJD，固件 43.21.96、SDK 11.2.0、Node.js 20.12.2）。webOS 24 / 25 的 Node 16 缺少新版相册所用的取消 API，不能直接视为本版支持；旧电视可先保留 [v0.3.1](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，其整机兼容性也需按型号验证。4K 照片还需要电视实际支持 WebCodecs 编码，普通预览不依赖这项能力。运行时版本可查 [LG 官方说明](https://webostv.developer.lge.com/develop/guides/js-service-basics)。本项目不是 Android APK，不支持 NetCast 电视。
 
 ### 2. 在电视开启 Developer Mode
 
@@ -96,7 +96,8 @@ NAS 密码不会保存；登录会话保存在电视服务自己的私有持久�
 
 - **影视**：首页、海报墙、媒体库、电影 / 电视剧、搜索、详情、收藏、最近播放、续播、选集 / 版本及播放记录同步。
 - **播放按钮区**：左右键移动焦点；上键进入进度条，再用左右键快退 / 快进 10 秒；下键返回按钮区。控制栏隐藏时，左右键可直接快退 / 快进。
-- **播放设置**：按 NAS 实际返回显示原画和转码档位，切换时保留位置；真实音轨 / 字幕轨、外挂与在线字幕、字幕偏移和样式、0.5–2 倍速、比例、顺序 / 循环及跳片头片尾。下载、删除字幕只在用户明确操作时调用。
+- **首页遥控**：上下键在海报与各内容行之间逐行移动；首行再按上键回到首页海报。页头向下滚动时隐藏，回到顶部后恢复。
+- **播放设置**：播放栏右侧当前画质可直接选择，也可从设置进入；按 NAS 实际返回显示原画和转码档位，切换时保留位置；真实音轨 / 字幕轨、外挂与在线字幕、字幕偏移和样式、0.5–2 倍速、比例、顺序 / 循环及跳片头片尾。下载、删除字幕只在用户明确操作时调用。
 - **相册**：时间线、相册、文件夹、回忆、人物 / 地点 / 事物 / 宠物分类、搜索、已有收藏、筛选、排序和照片信息；全屏翻页、旋转、放大、实况动态部分和相册视频画质。
 - **幻灯片**：2 / 3 / 5 / 10 / 15 秒、顺序 / 随机 / 循环、适应 / 填充及 NAS 内置背景音乐；离开、后台或换账号时释放播放资源。
 - **4K 照片**：从原文件解码 JPEG / PNG / HEIF，在支持的电视上通过 3840×2160 视频平面显示。C5 已验证真实 NAS HEIF 和实际 UI 按钮路径；处理期间可以返回取消。该模式使用有损 AVC 编码，颜色可能与原图不同；不支持同时旋转、缩放，不等于原始色深 / HDR 或物理像素逐点验收。
@@ -147,6 +148,6 @@ python tools/check-tv-package.py
 
 `package:tv` 会构建二维码、播放轨道资源、惰性加载的 HEIF Worker 资源和电视 JS 服务，一起打入 `dist/CloudFrame.ipk`。服务不携带 `sharp` 或 Android 私有 SDK，也不需要 root 电视。HEIF 使用 libheif-js / libheif / libde265 的 WebAssembly，随包保留许可；本版发布页另附对应源码包。
 
-服务测试、模拟界面测试与真实电视验证的范围见 [v0.4.0 变更与验证记录](docs/CHANGELOG-0.4.0.md)，上一版见 [v0.3.1](docs/BUGFIX-0.3.1.md)。播放器和相册界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=19-56)。
+服务测试、模拟界面测试与真实电视验证的范围见 [v0.4.1 变更与验证记录](docs/BUGFIX-0.4.1.md)，上一版见 [v0.4.0](docs/CHANGELOG-0.4.0.md)。播放器和相册界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=19-56)。
 
 旧版可选 Docker 服务仍保留源码，供兼容模式使用。开发调试脚本、原始 Android APK、个人 NAS 地址、账号密码、会话、电视开发密钥和照片均不应提交到仓库或打进发布包。

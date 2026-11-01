@@ -20,11 +20,12 @@ async function start() {
     await storage.checkWritable();
     await storage.migrate();
     const control = new DirectConnection({ dir, config }); await control.load();
-    const transport = new AdaptiveNas(config); await transport.select();
+    const transport = new AdaptiveNas(config);
     const token = randomBytes(32).toString('hex');
     const bridge = await createBridge({ dir, config, control, thumbnails: new NativeThumbnails(), host: '127.0.0.1', port: 0, clientToken: token, nasClient: transport });
+    transport.select().catch(() => {});
     control.onChange = () => { bridge.reset(); transport.reset(); transport.select().catch(() => {}); };
-    return { server: 'http://127.0.0.1:' + bridge.server.address().port, token, runtimeVersion: '0.4.0', ...control.status() };
+    return { server: 'http://127.0.0.1:' + bridge.server.address().port, token, runtimeVersion: '0.4.1', ...control.status() };
   })().catch(error => { starting = null; throw error; });
   return starting;
 }

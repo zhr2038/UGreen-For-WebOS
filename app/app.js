@@ -10,7 +10,7 @@
   const S = { server: store.get('server', location.protocol.startsWith('http') ? location.origin : ''), token: store.get('token'), route: 'home', home: null, hero: 0, list: [], page: 1, last: true, detail: null, playback: null, returnRoute: 'home', returnView: null, dialog: null, controls: true, busy: false, epoch: 0, exitConfirm: false, playGeneration: 0, playStarting: false, pendingResume: new Map() };
   let toastTimer, controlsTimer, heroTimer, lastNavigationAt = 0, lastNavigationCode;
   let directAuth, connectionMode = store.get('connectionMode', 'direct');
-  let imageObserver;
+  let imageObserver, headerScroll;
   let progressTail = Promise.resolve();
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const icons = {
@@ -50,14 +50,47 @@
       const res = await fetch(connection.server + path, { method: data ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + connection.token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined, signal: controller.signal });
       const result = await res.json(); if (!res.ok) throw new Error(result.error || '连接失败');
       if (path.startsWith('/api/play/options?')) { const p = S.playback; if (p && new URL(path, 'http://app').searchParams.get('id') === p.id) initializePlaybackOptions(p, result).catch(() => {}); }
+      if (path !== '/api/connection' && connection.server === S.server && connection.token === S.token) refreshConnection();
       return result;
     } catch (error) { if (error.name === 'AbortError' && timedOut) throw new Error('连接超时，请检查电视和 NAS 的网络'); throw error; }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  }
+  let connectionCheck, connectionCheckedHome, connectionCheckedAt = 0, connectionUnloaded = false;
+  function cancelConnectionCheck(reset = false) {
+    const check = connectionCheck; connectionCheck = null;
+    if (check) { clearTimeout(check.timer); clearTimeout(check.deadline); check.controller?.abort(); }
+    if (reset) { connectionCheckedHome = null; connectionCheckedAt = 0; }
+  }
+  function refreshConnection() {
+    if (connectionUnloaded || !window.PalmServiceBridge || connectionMode !== 'direct' || document.hidden || !S.home) return;
+    if (connectionCheck && (connectionCheck.home !== S.home || connectionCheck.server !== S.server || connectionCheck.token !== S.token)) cancelConnectionCheck(true);
+    if (connectionCheck || (connectionCheckedHome === S.home && Date.now() - connectionCheckedAt < 10000)) return;
+    const check = { home: S.home, server: S.server, token: S.token, started: Date.now() };
+    connectionCheck = check; connectionCheckedHome = S.home; connectionCheckedAt = check.started;
+    const current = () => connectionCheck === check && !document.hidden && !connectionUnloaded && connectionMode === 'direct' && check.home === S.home && check.server === S.server && check.token === S.token;
+    const stop = () => { if (connectionCheck === check) cancelConnectionCheck(); };
+    check.deadline = setTimeout(stop, 12000);
+    async function read() {
+      if (!current()) { stop(); return; }
+      check.controller = new AbortController();
+      try {
+        const status = await api('/api/connection', undefined, check.controller.signal, { server: check.server, token: check.token });
+        if (!current()) { stop(); return; }
+        check.home.connection = status.mode === 'lan-https' && status.verified === true ? '局域网直连' : 'UGREENlink 中继';
+        const label = $('.header .connection');
+        if (label) label.textContent = (check.home.name || '绿联 NAS') + ' · ' + check.home.connection;
+        if (status.probing === true && Date.now() - check.started < 11000) check.timer = setTimeout(read, 1000);
+        else stop();
+      } catch { stop(); }
+    }
+    read();
   }
   function cancelPlayRequest() {
     S.playAbort?.abort(); S.playAbort = null; S.playStarting = false; S.playGeneration++;
   }
   function beginView(name) {
+    if (name === 'settings') cancelConnectionCheck(true);
+    clearHeaderScroll();
     artwork.clearView();
     imageObserver?.disconnect(); imageObserver = null;
     if (name !== 'settings') directAuth?.leave();
@@ -105,6 +138,14 @@
   }
   function image(path, className = '', alt = '', kind = 'poster') { return path ? `<img class="${className}" data-art-source="${esc(asset(path))}" data-art-kind="${className === 'backdrop' ? 'backdrop' : kind}" alt="${esc(alt)}">` : ''; }
   function header(title) { return `<header class="header"><span class="app-brand"><img src="icon-cloudframe.png" alt=""><b>云映</b></span><h1>${esc(title)}</h1><span class="connection">${esc(S.home?.name || '绿联 NAS')} · ${esc(S.home?.connection || (connectionMode === 'direct' ? 'UGREENlink' : '兼容服务'))}</span></header>`; }
+  function clearHeaderScroll() { if (headerScroll) { headerScroll.screen.removeEventListener('scroll', headerScroll.update); headerScroll = null; } }
+  function bindHeaderScroll() {
+    const screen = root.querySelector('.screen'), element = root.querySelector('.header');
+    if (headerScroll?.screen === screen && headerScroll?.element === element) { headerScroll.update(); return; }
+    clearHeaderScroll(); if (!screen || !element) return;
+    const binding = { screen, element, hidden: null, update() { const hidden = screen.scrollTop > 12; if (binding.hidden === hidden) return; binding.hidden = hidden; element.classList.toggle('is-scrolled', hidden); element.setAttribute('aria-hidden', String(hidden)); } };
+    headerScroll = binding; screen.addEventListener('scroll', binding.update, { passive: true }); binding.update();
+  }
   function nav(active) { return `<nav class="nav" aria-label="主导航">${['search', 'home', 'movies', 'tv', 'favorites', 'history', 'folders', 'photos', 'settings'].map(k => `<button data-route="${k}" class="${active === k ? 'active' : ''}" aria-label="${labels[k]}">${icon(k)}<span>${labels[k]}</span></button>`).join('')}</nav>`; }
   const photoGallery = window.createPhotoGallery({ root, api, asset, esc, header, nav, bind, focus, toast, store, getConnection: () => ({ server: S.server, token: S.token }), videoPlane: () => S.route === 'photos' && !S.playback ? video : null, exit: () => route('home') });
   const playerTracks = new window.CloudFramePlayback.MediaTrackController(video, {
@@ -117,9 +158,15 @@
   const movieMedia = window.createMovieMedia({ video, api, asset, getPlayback: () => S.playback, onChange: updatePlayerInfo, onWarning: toast, captureTracks: () => playerTracks.capture(), restoreTracks: (saved, options) => playerTracks.restore(saved, options) });
   const playerOptions = window.createPlayerOptions({ video, api, asset, root: () => $('#player-dialog'), getPlayback: () => S.playback, tracks: playerTracks, store, focus, toast,
     onSourceSwitch: movieMedia.switchSource,
-    onClose() { if (S.dialog === 'advanced') { S.dialog = null; showControls(); focus(document.getElementById(S.dialogReturnFocus) || $('#player-settings')); } },
+    onClose() { $('#player-quality')?.setAttribute('aria-expanded', 'false'); if (S.dialog === 'advanced') { S.dialog = null; showControls(); focus(document.getElementById(S.dialogReturnFocus) || $('#player-settings')); } },
   });
-  function updatePlayerInfo() { const p = S.playback, info = $('.player-buttons .info'); if (!p || !info) return; const pixels = video.videoWidth && video.videoHeight ? video.videoWidth + ' × ' + video.videoHeight : ''; info.textContent = p.kind === 'hls' ? [p.quality?.label, pixels, 'NAS 转码'].filter(Boolean).join(' · ') : [p.quality?.label || '原画', pixels || S.detail?.item.clarity, p.technical?.video_info?.codec?.toUpperCase()].filter(Boolean).join(' · '); }
+  function updatePlayerInfo() {
+    const p = S.playback, label = $('#player-quality-label'), detail = $('#player-quality-detail'); if (!p || !label || !detail) return;
+    const pixels = video.videoWidth && video.videoHeight ? video.videoWidth + ' × ' + video.videoHeight : '';
+    label.textContent = p.quality?.label || '原画';
+    detail.textContent = p.kind === 'hls' ? [pixels, 'NAS 转码'].filter(Boolean).join(' · ') : [pixels || S.detail?.item.clarity, p.technical?.video_info?.codec?.toUpperCase()].filter(Boolean).join(' · ');
+    $('#player-quality')?.setAttribute('aria-label', '选择画质，当前为' + label.textContent);
+  }
   function releasePlayback(p) { if (!p) return; (p.reportPromise || Promise.resolve()).finally(() => api('/api/play/close', { id: p.id }, undefined, p.connection)).catch(() => {}); }
   function resumeKey(id, scope = S.accountScope) { return (scope || S.server + '|' + S.token) + '|' + String(id); }
   async function initializePlaybackOptions(p, data) {
@@ -154,7 +201,7 @@
     try { const data = await api('/api/home'); if (epoch !== S.epoch) return; const scope = data.accountScope || S.server + '|' + S.token; if (S.accountScope && S.accountScope !== scope) photoGallery.reset(); S.home = data; S.accountScope = scope; S.hero = 0; renderHome(); }
     catch (err) { if (epoch === S.epoch) errorScreen(err); }
   }
-  function loading() { artwork.clearView(); imageObserver?.disconnect(); imageObserver = null; root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
+  function loading() { clearHeaderScroll(); artwork.clearView(); imageObserver?.disconnect(); imageObserver = null; root.innerHTML = '<div class="loading"><span class="spinner"></span>正在连接影视中心…</div>'; }
   function errorScreen(error, retry = home) { root.innerHTML = `<div class="error-screen"><h1>暂时无法连接</h1><p>${esc(error.message)}</p><div class="actions"><button class="action" data-primary id="retry">重试</button><button class="action secondary" data-route="settings">连接设置</button></div></div>`; $('#retry').onclick = retry; bind(); firstFocus(); }
   function renderLibrary() {
     const title = S.libraryTitle || labels[S.route] || '全部影片';
@@ -222,9 +269,10 @@
     finally { if (generation === S.playGeneration) { S.playStarting = false; S.playAbort = null; } }
   }
   function renderPlayer() {
+    clearHeaderScroll();
     artwork.clearView();
-    root.innerHTML = `<div class="player-ui ${S.controls ? '' : 'hidden'}"><div class="player-top"><button class="back" style="position:static" id="stop-player" aria-label="返回">${icon('back')}</button><span>${esc(S.playback.title)}</span></div><div class="player-bottom"><div class="player-time"><b id="elapsed">${time(video.currentTime)}</b><span>/ <b id="duration">${time(video.duration || S.playback.duration)}</b></span></div><div class="seek" id="player-seek" tabindex="0" role="slider" aria-label="播放进度" aria-valuemin="0" aria-valuemax="${S.playback.duration || 0}" aria-valuenow="0"><i id="seek-progress"></i></div><div class="player-buttons"><button id="pause" data-primary>${video.paused ? '播放' : '暂停'}</button><button id="episode-list">列表</button><button id="player-settings">设置</button><button id="player-info">信息</button><span class="info">原画 · ${esc(S.detail.item.clarity)} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}</span></div><p class="player-hint">左右选择按钮 · 上键调整进度 · 下键返回按钮</p></div></div><div id="player-dialog"></div><div id="player-message"></div>`;
-    $('#stop-player').onclick = stop; $('#pause').onclick = togglePause; $('#episode-list').onclick = () => playerDialog('episodes'); $('#player-settings').onclick = () => playerDialog('settings'); $('#player-info').onclick = () => playerDialog('info'); firstFocus(); updateProgress(); updatePlayerInfo();
+    root.innerHTML = `<div class="player-ui ${S.controls ? '' : 'hidden'}"><div class="player-top"><button class="back" style="position:static" id="stop-player" aria-label="返回">${icon('back')}</button><span>${esc(S.playback.title)}</span></div><div class="player-bottom"><div class="player-time"><b id="elapsed">${time(video.currentTime)}</b><span>/ <b id="duration">${time(video.duration || S.playback.duration)}</b></span></div><div class="seek" id="player-seek" tabindex="0" role="slider" aria-label="播放进度" aria-valuemin="0" aria-valuemax="${S.playback.duration || 0}" aria-valuenow="0"><i id="seek-progress"></i></div><div class="player-buttons"><button id="pause" data-primary>${video.paused ? '播放' : '暂停'}</button><button id="episode-list">列表</button><button id="player-settings">设置</button><button id="player-info">信息</button><button type="button" id="player-quality" class="info player-quality" aria-haspopup="dialog" aria-controls="player-dialog" aria-expanded="false"><span id="player-quality-label">原画</span><span id="player-quality-detail"></span><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div><p class="player-hint">左右选择按钮 · 上键调整进度 · 下键返回按钮</p></div></div><div id="player-dialog"></div><div id="player-message"></div>`;
+    $('#stop-player').onclick = stop; $('#pause').onclick = togglePause; $('#episode-list').onclick = () => playerDialog('episodes'); $('#player-settings').onclick = () => playerDialog('settings'); $('#player-info').onclick = () => playerDialog('info'); $('#player-quality').onclick = () => playerDialog('quality'); firstFocus(); updateProgress(); updatePlayerInfo();
   }
   function showControls() {
     if (S.route !== 'player') return;
@@ -286,7 +334,7 @@
   function dialogBack() { if (['audio', 'subtitle', 'speed', 'ratio'].includes(S.dialog)) playerDialog('settings'); else closeDialog(); }
   function playerDialog(kind) {
     if (!S.dialog) S.dialogReturnFocus = document.activeElement?.id;
-    if (kind === 'settings') { S.dialog = 'advanced'; showControls(); playerOptions.open('settings'); return; }
+    if (kind === 'settings' || kind === 'quality') { S.dialog = 'advanced'; showControls(); $('#player-quality')?.setAttribute('aria-expanded', String(kind === 'quality')); playerOptions.open(kind, { backToPlayer: kind === 'quality' }); return; }
     S.dialog = kind; showControls();
     let content = '';
     if (kind === 'episodes') content = `<h2>播放列表</h2>${S.detail.files.map(f => `<button data-switch="${f.index}">${esc(f.episode ? '第 ' + f.episode + ' 集 · ' + f.name : f.name)}</button>`).join('')}`;
@@ -383,6 +431,8 @@
     beginView(name); loadLibrary(true);
   }
   function bind() {
+    bindHeaderScroll();
+    if (S.route !== 'settings') refreshConnection();
     artwork.observe(root);
     imageObserver?.disconnect();
     if (window.IntersectionObserver) {
@@ -426,6 +476,28 @@
       if (all.includes(S.lastContentFocus) && !S.lastContentFocus.closest('.nav')) { focus(S.lastContentFocus); return; }
     }
     const row = current.closest('.shelf-row');
+    // Home has ordered content shelves. Geometry alone can prefer a hero
+    // pagination dot or a distant row once the hero has scrolled off screen.
+    const homeHero = S.route === 'home' && scope === root && root.querySelector('.hero [data-primary]');
+    if (homeHero === current && direction === 'left') { focus(root.querySelector('.nav button.active')); return; }
+    if (homeHero && !inNav && (direction === 'up' || direction === 'down')) {
+      const rows = Array.from(root.querySelectorAll('.shelf-row')).filter(value => all.some(el => value.contains(el)));
+      const index = rows.indexOf(row), inHero = current.closest('.hero');
+      if (index >= 0 || inHero) {
+        if (direction === 'up' && (index === 0 || inHero)) {
+          focus(homeHero); const screen = homeHero.closest('.screen'); if (screen) screen.scrollTop = 0;
+          return;
+        }
+        const target = rows[inHero ? 0 : index + (direction === 'up' ? -1 : 1)];
+        if (target) {
+          const a = current.getBoundingClientRect(), center = a.left + a.width / 2;
+          const items = all.filter(el => target.contains(el));
+          items.sort((a, b) => { const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect(); return Math.abs(ar.left + ar.width / 2 - center) - Math.abs(br.left + br.width / 2 - center); });
+          focus(items[0]);
+        }
+        return;
+      }
+    }
     if (row && (direction === 'left' || direction === 'right')) {
       const items = Array.from(row.querySelectorAll('button')).filter(el => !el.disabled);
       const next = items[items.indexOf(current) + (direction === 'right' ? 1 : -1)];
@@ -469,6 +541,7 @@
       if (!S.dialog) {
         const current = document.activeElement;
         if ((code === 37 || code === 39) && (!S.controls || current?.id === 'player-seek')) { e.preventDefault(); seek(code === 39 ? 10 : -10); return; }
+        if ((code === 37 || code === 39) && current?.closest('.player-buttons')) { e.preventDefault(); showControls(); const buttons = Array.from($('.player-buttons').querySelectorAll('button')).filter(button => !button.disabled); focus(buttons[buttons.indexOf(current) + (code === 39 ? 1 : -1)] || current); return; }
         if (code === 13 && (!S.controls || current?.id === 'player-seek')) { e.preventDefault(); if (!e.repeat) togglePause(); focus($('#pause')); return; }
         if (direction && !S.controls) { e.preventDefault(); showControls(); focus(code === 38 ? $('#player-seek') : $('#pause')); return; }
         if (code === 38 && $('.player-buttons')?.contains(current)) { e.preventDefault(); showControls(); focus($('#player-seek')); return; }
@@ -480,7 +553,7 @@
   });
   document.addEventListener('mousemove', () => { if (S.route === 'player') showControls(); });
   root.addEventListener('focusin', () => { if (root.contains(document.activeElement) && !document.activeElement.closest('.nav')) { S.lastContentFocus = document.activeElement; artwork.prioritize(document.activeElement.querySelector('img[data-art-kind]')); } const hint = $('.player-hint'); if (hint) hint.textContent = document.activeElement?.id === 'player-seek' ? '左右快退 / 快进 10 秒 · 下键选择按钮 · 确定播放 / 暂停' : '左右选择按钮 · 上键调整进度 · 下键返回按钮'; });
-  addEventListener('beforeunload', () => artwork.destroy());
+  addEventListener('beforeunload', () => { connectionUnloaded = true; cancelConnectionCheck(); clearHeaderScroll(); artwork.destroy(); });
   video.addEventListener('loadedmetadata', () => { if (S.route !== 'player') return; if (!movieMedia.switching()) { if (S.playback?.position > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(S.playback.position, Math.max(0, video.duration - 1)); updatePlayerInfo(); } updateProgress(); });
   video.addEventListener('timeupdate', () => {
     if (S.route !== 'player') return;
@@ -500,12 +573,12 @@
     if (next !== null) play(true, S.detail.files[next].index); else { toast('播放结束'); showControls(); }
   });
   video.addEventListener('error', () => { if (S.route === 'player' && !movieMedia.switching()) playerError('电视无法播放这个片源。可能是音视频编码或封装格式不受支持。'); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && S.route === 'player') { video.pause(); reportProgress(true); } });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelConnectionCheck(); else refreshConnection(); if (document.hidden && S.route === 'player') { video.pause(); reportProgress(true); } });
   function resize() { const scale = Math.min(innerWidth / 1920, innerHeight / 1080); $('#stage').style.transform = `scale(${scale})`; $('#stage').style.left = ((innerWidth - 1920 * scale) / 2) + 'px'; $('#stage').style.top = ((innerHeight - 1080 * scale) / 2) + 'px'; }
   addEventListener('resize', resize); resize();
   directAuth = window.createDirectLogin({ root, esc, store, bind, focus,
-    connected(gateway, status) { photoGallery.reset(); artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
-    bridgeMode() { connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
+    connected(gateway, status) { cancelConnectionCheck(true); photoGallery.reset(); artwork.clearAll(); connectionMode = 'direct'; S.server = gateway.server; S.token = gateway.token; S.home = null; home(); },
+    bridgeMode() { cancelConnectionCheck(true); connectionMode = 'bridge'; store.set('connectionMode', 'bridge'); S.server = store.get('server', location.protocol.startsWith('http') ? location.origin : ''); S.token = store.get('token'); setupLegacy(); },
     back: home,
   });
   if (directAuth.available && connectionMode !== 'bridge') {

@@ -43,6 +43,7 @@ async page => {
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization,Content-Type' } });
     const call = { path: url.pathname, host: url.host, query: url.search, authorization: request.headers().authorization, body: request.postDataJSON() }; state.calls.push(call);
+    if (url.pathname === '/api/connection') { const status = state.connectionStatus || { mode: 'ugreenlink-relay', verified: false, probing: false }; const gate = state.connectionGate; if (gate) await gate.promise; return response(route, status, state.connectionHttpStatus || 200); }
     if (url.pathname === '/api/direct/status') return response(route, { connected: Boolean(state.directConnected), alias: 'example', username: 'viewer' });
     if (url.pathname === '/api/direct/login') { if (state.directLoginGate) await state.directLoginGate.promise; if (state.directFail) return response(route, { error: 'NAS 用户名或密码错误' }, 401); state.directConnected = true; return response(route, { connected: true }); }
     if (url.pathname === '/api/direct/qr/create') return response(route, { url: 'https://www.ugnas.com/scan?example=1', expiresAt: Date.now() + 60000, interval: 60 });
@@ -51,11 +52,11 @@ async page => {
     if (url.pathname === '/api/direct/logout') { state.directConnected = false; return response(route, { connected: false }); }
     if (url.pathname === '/api/direct/cancel') return response(route, { ok: true });
     if (url.host.startsWith('bad-nas.test')) return response(route, { error: '配对码错误' }, 401);
-    if (url.pathname === '/api/home') return response(route, { accountScope: state.accountScope || 'account-A', name: '测试 NAS', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
+    if (url.pathname === '/api/home') return response(route, { accountScope: state.accountScope || 'account-A', name: '测试 NAS', connection: 'UGREENlink 中继', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
     if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; return response(route, { items: Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1)), total: 120, last: n >= 2 }); }
     if (url.pathname === '/api/detail') return response(route, { item: movie(Number(url.searchParams.get('id'))), files: [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }], actors: [], technical: { container: 'mp4', video_info: { codec: 'h264', resolution: '1920x1080' }, audio_info: [] } });
     if (url.pathname === '/api/play') { const gate = state.playGate; if (gate) await gate.promise; if (state.playError) return response(route, { error: '无法打开版本' }, 503); const id = 'play-' + (++state.playId); return response(route, { id, stream: '/media/' + id, fileIndex: call.body.fileIndex || 0, title: '测试播放', position: call.body.restart ? 0 : 120, duration: 3600, technical: {} }); }
-    if (url.pathname === '/api/play/options') { if (state.optionsGate) await state.optionsGate.promise; return response(route, { qualities: [{ id: 'original', label: '原画' }, { id: '720p', label: '720P', resolution: '1280×720' }], audio: [], subtitles: [], selected: 'original', preferences: state.preferences || { mode: 'sort_list', rate: 1, fit: 'contain' } }); }
+    if (url.pathname === '/api/play/options') { if (state.optionsGate) await state.optionsGate.promise; return response(route, { qualities: [{ id: 'original', label: '原画' }, { id: '720p', label: '720P', resolution: '1280×720' }, ...(state.threeQualities ? [{ id: '480p', label: '480P', resolution: '720×480' }] : [])], audio: [], subtitles: [], selected: 'original', preferences: state.preferences || { mode: 'sort_list', rate: 1, fit: 'contain' } }); }
     if (url.pathname === '/api/play/skips') return response(route, { enabled: false, ranges: [] });
     if (url.pathname === '/api/play/quality') {
       if (call.body.action === 'commit') { state.activeSource = { id: call.body.id, sourceId: call.body.candidateId, stream: '/media/candidate', kind: 'hls', quality: { id: '720p', label: '720P' } }; if (state.commitGate) await state.commitGate.promise; return response(route, state.activeSource); }
@@ -219,6 +220,38 @@ async page => {
     await page.locator('#load-more').click(); await page.locator('#sort').selectOption('1'); await page.waitForSelector('[data-item="1001"]', { timeout: 1200 }); gate.resolve(); await delay(100);
     check(await page.locator('.grid .movie').count() === 60 && await page.locator('[data-item="61"]').count() === 0, 'Old pagination response polluted the newly sorted library');
   });
+  async function connectDirectHome() {
+    await page.evaluate(() => sessionStorage.setItem('ui.direct', '1')); control.directConnected = true;
+    await page.reload(); await page.waitForSelector('button[data-primary][data-item]');
+  }
+  await run('连接标签在后台探测后更新且保留隐藏页头和焦点', async () => {
+    control.connectionStatus = { mode: 'ugreenlink-relay', verified: false, probing: true };
+    await connectDirectHome(); await page.waitForFunction(() => document.querySelector('.connection')?.textContent.includes('中继'));
+    await page.locator('[data-route="home"]').focus(); await page.locator('.screen').evaluate(el => el.scrollTop = 500);
+    await page.waitForFunction(() => document.querySelector('.header')?.getAttribute('aria-hidden') === 'true');
+    const scroll = await page.locator('.screen').evaluate(el => el.scrollTop);
+    control.connectionStatus = { mode: 'lan-https', verified: true, probing: false };
+    await page.waitForFunction(() => document.querySelector('.connection')?.textContent.includes('局域网直连'));
+    check(await page.locator('.header').getAttribute('aria-hidden') === 'true', 'Connection refresh exposed the hidden header');
+    check(await page.evaluate(() => document.activeElement.dataset.route) === 'home', 'Connection refresh stole focus');
+    check(await page.locator('.screen').evaluate(el => el.scrollTop) === scroll, 'Connection refresh moved scroll');
+    const count = control.calls.filter(c => c.path === '/api/connection').length; await delay(1150);
+    check(control.calls.filter(c => c.path === '/api/connection').length === count, 'Finished connection round kept polling');
+  });
+  await run('连接标签拒绝旧账号迟到响应且未知状态保留中继', async () => {
+    const gate = deferred(); control.gates.push(gate); control.connectionGate = gate;
+    control.connectionStatus = { mode: 'lan-https', verified: true, probing: false };
+    await connectDirectHome(); await page.waitForFunction(() => Boolean(document.querySelector('.connection')));
+    while (!control.calls.some(c => c.path === '/api/connection')) await delay(10);
+    await page.locator('[data-route="settings"]').click(); await page.waitForSelector('#direct-logout'); await page.locator('#direct-logout').click();
+    await page.waitForSelector('#direct-password'); control.accountScope = 'account-B'; control.connectionGate = null;
+    control.connectionStatus = { mode: 'lan-https', verified: false, probing: false };
+    await page.locator('#direct-alias').fill('new-account'); await page.locator('#direct-user').fill('viewer'); await page.locator('#direct-password').fill('new-test-password');
+    await page.locator('#direct-form button[type="submit"]').click(); await page.waitForSelector('button[data-primary][data-item]');
+    await page.waitForFunction(() => document.querySelector('.connection')?.textContent.includes('中继'));
+    gate.resolve(); await delay(200);
+    check((await page.locator('.connection').textContent()).includes('中继'), 'Old account LAN result polluted the new account');
+  });
   await run('电视直连账号登录通过本机服务，不保存 NAS 密码', async () => {
     await directLogin(); await page.locator('#direct-alias').fill('example'); await page.locator('#direct-user').fill('viewer'); await page.locator('#direct-password').fill('private-test-password');
     await page.locator('#direct-form button[type="submit"]').click(); await page.waitForSelector('button[data-primary][data-item]');
@@ -257,9 +290,66 @@ async page => {
     check(await page.locator('.screen').evaluate(el => el.scrollTop) === before, 'Focusing fixed navigation scrolled the page');
     await page.keyboard.press('ArrowRight'); check(await page.evaluate(() => Boolean(document.activeElement.closest('.shelf-row'))), 'Right did not restore the previous content focus');
   });
-  await run('滚动后的页头视觉回归', async () => {
-    await page.locator('.screen').evaluate(el => el.scrollTop = 500); await delay(100);
-    await page.screenshot({ path: 'output/playwright/home-header-fixed.png' });
+  await run('遥控器逐行返回首页海报且恢复顶部页头', async () => {
+    await page.locator('.hero [data-primary]').focus();
+    await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(() => document.activeElement.closest('.shelf')?.querySelector('h2')?.textContent) === '最近播放', 'Down from hero skipped the first shelf');
+    await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(() => document.activeElement.closest('.shelf')?.querySelector('h2')?.textContent) === '我的媒体库', 'Down did not traverse the second shelf');
+    await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(() => document.activeElement.closest('.shelf')?.querySelector('h2')?.textContent) === '最近更新', 'Down did not reach the third shelf');
+    check(await page.locator('.hero [data-primary]').evaluate(el => el.getBoundingClientRect().bottom < 0), 'Remote traversal did not scroll the hero off screen');
+    await page.keyboard.press('ArrowUp');
+    check(await page.evaluate(() => document.activeElement.closest('.shelf')?.querySelector('h2')?.textContent) === '我的媒体库', 'Up teleported past the previous shelf');
+    await page.keyboard.press('ArrowUp');
+    check(await page.evaluate(() => document.activeElement.closest('.shelf')?.querySelector('h2')?.textContent) === '最近播放', 'Up skipped the first shelf');
+    await page.keyboard.press('ArrowUp');
+    check(await page.evaluate(() => document.activeElement.matches('.hero [data-primary]')), 'Up from first shelf did not return to hero CTA');
+    check(await page.locator('.screen').evaluate(el => el.scrollTop) === 0, 'Returning to hero did not restore the top');
+    await page.waitForFunction(() => document.querySelector('.header')?.getAttribute('aria-hidden') === 'false');
+    await page.keyboard.press('ArrowLeft'); check(await page.evaluate(() => Boolean(document.activeElement.closest('.nav'))), 'Hero can no longer enter left navigation');
+    await page.keyboard.press('ArrowRight'); check(await page.evaluate(() => document.activeElement.matches('.hero [data-primary]')), 'Navigation trapped hero focus');
+  });
+  await run('媒体库上下方向仍逐行导航且不会套用首页海报返回', async () => {
+    await page.locator('[data-route="movies"]').click(); await page.waitForSelector('.grid .movie');
+    await page.locator('.grid .movie').first().focus(); await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(() => document.activeElement.dataset.item) === '7', 'Library down skipped a grid row');
+    await page.keyboard.press('ArrowUp'); check(await page.evaluate(() => document.activeElement.dataset.item) === '1', 'Library up did not return to its previous row');
+    check(await page.locator('.hero').count() === 0, 'Library unexpectedly acquired a hero');
+  });
+  await run('首页海报铺到顶部，滚动隐藏透明页头并保留导航焦点', async () => {
+    await page.waitForFunction(() => document.querySelector('.backdrop')?.naturalWidth > 0);
+    check(await page.locator('.backdrop').evaluate(el => el.getBoundingClientRect().top === 0 && el.getBoundingClientRect().width === 1920), 'Backdrop does not reach the full-width top edge');
+    check(await page.locator('.header').evaluate(el => getComputedStyle(el).backgroundColor === 'rgba(0, 0, 0, 0)' && ['none','normal'].includes(getComputedStyle(el, '::before').content)), 'Header still paints a solid band');
+    await page.locator('[data-route="home"]').focus();
+    await page.locator('.screen').evaluate(el => el.scrollTop = 500);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.header')).visibility === 'hidden');
+    check(await page.locator('.header').getAttribute('aria-hidden') === 'true', 'Scrolled header remains exposed');
+    check(await page.evaluate(() => document.activeElement.dataset.route) === 'home', 'Scrolling stole navigation focus');
+    check(await page.locator('.nav').isVisible(), 'Hiding the header hid navigation');
+    await page.screenshot({ path: 'output/playwright/home-header-scrolled.png' });
+    await page.locator('.screen').evaluate(el => el.scrollTop = 0);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.header')).visibility === 'visible');
+    check(await page.locator('.header').getAttribute('aria-hidden') === 'false', 'Returning to top did not restore the header');
+    await page.keyboard.press('ArrowRight');
+    check(await page.evaluate(() => Boolean(document.activeElement.dataset.primary !== undefined)), 'Navigation no longer returns to the hero control');
+    await page.screenshot({ path: 'output/playwright/home-header-overlay.png' });
+  });
+  await run('列表页头随滚动隐藏，换页恢复且旧屏幕不影响新页', async () => {
+    await page.evaluate(() => window.__oldHeaderScreen = document.querySelector('.screen'));
+    await page.locator('[data-route="movies"]').click(); await page.waitForSelector('.grid .movie');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.header')).visibility === 'visible');
+    await page.evaluate(() => { __oldHeaderScreen.scrollTop = 500; __oldHeaderScreen.dispatchEvent(new Event('scroll')); });
+    check(await page.locator('.header').getAttribute('aria-hidden') === 'false', 'Detached screen hid the new header');
+    await page.locator('[data-item="15"]').focus();
+    await page.locator('.screen').evaluate(el => el.scrollTop = 500);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.header')).visibility === 'hidden');
+    check(await page.evaluate(() => document.activeElement.dataset.item) === '15', 'Header visibility update stole content focus');
+    await page.keyboard.press('ArrowRight');
+    check(await page.evaluate(() => Boolean(document.activeElement.dataset.item) && document.activeElement.dataset.item !== '15'), 'Hidden header blocked content navigation');
+    await page.locator('[data-route="search"]').click(); await page.waitForSelector('#search');
+    check(await page.locator('.header').getAttribute('aria-hidden') === 'false', 'New route inherited the old scroll state');
+    check(await page.locator('.header h1').evaluate(el => el.getBoundingClientRect().bottom) < await page.locator('#search').evaluate(el => el.getBoundingClientRect().top), 'Restored header overlaps the search control');
   });
   await run('选择弹窗内左右键不能逃到页面导航', async () => {
     await page.locator('[data-route="movies"]').click(); await page.waitForSelector('#sort'); await page.locator('#sort').focus(); await page.keyboard.press('Enter'); await page.waitForSelector('.select-overlay');
@@ -267,11 +357,63 @@ async page => {
     await page.keyboard.press('Escape'); check(await page.evaluate(() => document.activeElement.id) === 'sort', 'Select did not restore focus');
   });
   async function qualityMenu() { await page.locator('#player-settings').click(); await page.locator('[data-po-action="open"][data-po-value="quality"]').click(); await page.waitForSelector('[data-po-action="quality"][data-po-value="720p"]'); }
+  await run('右侧当前画质可用遥控器直接选择，切换后保留进度与焦点', async () => {
+    await play(); await page.locator('#video').evaluate(v => { v.currentTime = 777; v.pause(); });
+    const route = [];
+    for (let i = 0; i < 4; i++) { await page.keyboard.press('ArrowRight'); route.push(await page.evaluate(() => document.activeElement.id)); }
+    check(route[3] === 'player-quality', 'Right did not reach the current quality button: ' + route.join(' → '));
+    check(await page.locator('#player-quality').getAttribute('aria-label') === '选择画质，当前为原画', 'Current quality is not exposed as a selector');
+    check(await page.locator('#video').evaluate(v => v.currentTime === 777), 'Reaching quality sought the video');
+    await page.keyboard.press('Enter'); await page.waitForSelector('.player-options[data-page="quality"] [data-po-value="720p"]');
+    check(await page.locator('#player-quality').getAttribute('aria-expanded') === 'true', 'Direct quality entry did not open');
+    await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(() => document.activeElement.dataset.poValue) === '720p', 'Remote Down did not reach the NAS quality');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#player-quality-label')?.textContent.includes('720P') && !document.querySelector('.player-options'));
+    check(await page.locator('#video').evaluate(v => v.currentTime === 777 && v.paused), 'Direct quality change lost position or pause');
+    check(control.calls.some(c => c.path === '/api/play/quality' && c.body.qualityId === '720p') && control.calls.some(c => c.body?.action === 'commit'), 'Remote selection did not prepare and commit');
+    check(await page.evaluate(() => document.activeElement.id) === 'player-quality', 'Quality change did not return focus to its entry');
+    check(await page.locator('#player-quality').getAttribute('aria-expanded') === 'false', 'Closed quality entry remained expanded');
+    await page.screenshot({ path: 'output/playwright/player-quality-entry.png' });
+  });
+  await run('直接画质入口返回原按钮，设置内画质返回设置页', async () => {
+    await play(); await page.locator('#player-quality').click(); await page.waitForSelector('.player-options[data-page="quality"]');
+    await page.keyboard.press('Escape');
+    check(await page.locator('.player-options').count() === 0 && await page.evaluate(() => document.activeElement.id) === 'player-quality', 'Direct quality Back did not return to the player button');
+    await page.keyboard.press('Enter'); await page.waitForSelector('.player-options[data-page="quality"]'); await page.locator('[data-po-back]').click();
+    check(await page.locator('.player-options').count() === 0 && await page.evaluate(() => document.activeElement.id) === 'player-quality', 'Visible Back did not return to the player button');
+    await qualityMenu(); await page.keyboard.press('Escape'); await page.waitForSelector('.player-options[data-page="settings"]');
+    check(await page.locator('#player-quality').getAttribute('aria-expanded') === 'false', 'Settings entry claimed the direct quality button was open');
+    await page.keyboard.press('Escape');
+    check(await page.evaluate(() => document.activeElement.id) === 'player-settings', 'Settings hierarchy did not retain its own return focus');
+  });
   await run('画质切换经过解码和提交后保留进度与暂停状态', async () => {
     await play(); await page.locator('#video').evaluate(v => { v.currentTime = 777; v.pause(); }); await qualityMenu();
     await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await page.waitForFunction(() => document.querySelector('.player-buttons .info')?.textContent.includes('720P'));
     check(await page.locator('#video').evaluate(v => v.currentTime === 777 && v.paused), 'Quality change lost position or pause');
     check(control.calls.some(c => c.body?.action === 'commit'), 'Decoded candidate was not committed');
+  });
+  await run('异步画质列表加载中返回后迟到选项不会重新夺取焦点', async () => {
+    const gate = deferred(); control.gates.push(gate); control.optionsGate = gate; control.threeQualities = true;
+    await play(); await page.locator('#player-quality').click();
+    await page.waitForFunction(() => document.querySelector('.player-options')?.dataset.busy === 'true');
+    await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('.player-options'));
+    gate.resolve(); await delay(120);
+    check(await page.evaluate(() => document.activeElement.id) === 'player-quality', 'Late options stole focus after closing');
+    check(await page.locator('.player-options').count() === 0, 'Late options reopened the panel');
+    check(!control.calls.some(c => c.path === '/api/play/quality'), 'Closing during load selected a quality');
+  });
+  await run('异步画质列表就绪后焦点回到当前档位，下键确认选择720P', async () => {
+    const gate = deferred(); control.gates.push(gate); control.optionsGate = gate; control.threeQualities = true;
+    await play(); await page.locator('#player-quality').click();
+    await page.waitForFunction(() => document.querySelector('.player-options')?.dataset.busy === 'true');
+    check(await page.evaluate(() => document.activeElement.hasAttribute('data-po-back')), 'Loading focus is not on the only available back action');
+    gate.resolve(); await page.waitForFunction(() => document.querySelector('.player-options')?.dataset.busy === 'false' && document.querySelectorAll('[data-po-action="quality"]').length === 3);
+    check(await page.evaluate(() => document.activeElement.dataset.poValue) === 'original', 'Loaded options inherited a numeric index instead of the selected quality');
+    await page.keyboard.press('ArrowDown'); check(await page.evaluate(() => document.activeElement.dataset.poValue) === '720p', 'Down from selected original skipped 720P');
+    await page.keyboard.press('Enter'); await page.waitForFunction(() => !document.querySelector('.player-options'));
+    check(control.calls.some(c => c.path === '/api/play/quality' && c.body.qualityId === '720p'), 'Remote selection did not request NAS 720P');
+    check(await page.evaluate(() => document.activeElement.id) === 'player-quality', 'Completed switch lost the quality entry focus');
   });
   await run('画质元数据加载中返回不会切断当前源', async () => {
     await play(); const old = await page.locator('#video').evaluate(v => v.src); await qualityMenu(); const gate = deferred(); control.gates.push(gate); control.qualityGate = gate;

@@ -1,0 +1,7 @@
+# LAN recovery diagnostics
+
+The service opens its loopback gateway before starting an 8-second bounded official SmartDNS HTTPS selection. Selection is single-flight. A failed selection or lost LAN route imposes a 30-second cooldown; subsequent authenticated foreground GET/HEAD activity can start another background selection. There is no periodic timer. POST operations are never automatically replayed after an unknown LAN outcome. Independent playback/photo snapshots retain their original credentials, Agent and pinned address and never select another route.
+
+Authenticated GET/HEAD `/api/connection` reports `mode`, `verified`, `p2p` (always false), `reason`, `probing`, `probeStage`, `probeError`, `probeElapsedMs`, `attempts`, `retryAfterMs`, `automaticRetry`. Stage retains the last attempted step after completion: DISCOVERY, RELAY_HANDSHAKE, DNS, LAN_HANDSHAKE, ACCOUNT_VERIFY; IDLE means no probe yet. Errors are static codes, never exception text, hostnames, addresses or credentials. TIMED_OUT with its retained stage identifies the phase that exhausted the overall budget; it does not establish the underlying network cause.
+
+TLS CA and hostname verification, pre-authentication NAS identity comparison and authenticated alias verification remain required. PC success does not establish TV connectivity. Inspect this endpoint in the actual main service context before attributing the TV's relay selection or claiming LAN acceptance.

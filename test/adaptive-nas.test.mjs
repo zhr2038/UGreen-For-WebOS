@@ -11,7 +11,7 @@ function fixture(select) {
 }
 test('only a completed verified selection activates LAN and keeps the canonical saved relay', async () => {
   const f = fixture(); assert.equal(await f.nas.request('home'), 'relay'); await f.nas.select(); assert.equal(await f.nas.request('home'), 'lan');
-  assert.equal(f.config.server, 'https://example.zh9.ug.link'); assert.deepEqual(f.nas.summary(), { mode: 'lan-https', verified: true, p2p: false }); f.nas.close();
+  assert.equal(f.config.server, 'https://example.zh9.ug.link'); assert.equal(f.nas.summary().verified, true); f.nas.close();
 });
 test('a failed LAN read falls back once while a POST with unknown outcome is never repeated', async () => {
   for (const method of ['GET', 'POST']) {
@@ -34,4 +34,30 @@ test('a playback snapshot keeps the original account and remains independently c
   assert.equal(snapshot.config.token, 'private-token'); assert.equal(snapshot.config.alias, 'example');
   assert.throws(() => { snapshot.config.token = 'wrong-account'; }); snapshot.close();
   const second = snapshot.snapshot(); assert.equal(second.config.token, 'private-token'); assert.equal(second.config.server, 'https://example.zh9.ug.link'); second.close();
+});
+
+
+test('foreground reads start one nonblocking 8s probe and retry only after cooldown', async () => {
+  let time = 100, release, attempts = 0;
+  const f = fixture(async options => { attempts++; assert.equal(options.timeout, 8000); options.onStage('DNS'); return new Promise(resolve => release = resolve); });
+  f.nas.now = () => time;
+  assert.equal(await f.nas.request('home'), 'relay');
+  assert.equal(await f.nas.request('next'), 'relay');
+  assert.equal(attempts, 1); assert.equal(f.nas.summary().probing, true);
+  const pending = f.nas.select(); assert.equal(pending, f.nas.select());
+  release({ client: null, summary: { reason: 'TIMED_OUT' }, close() {} }); await pending;
+  assert.equal(f.nas.summary().probeStage, 'DNS'); assert.equal(f.nas.summary().probeError, 'TIMED_OUT');
+  time += 29999; await f.nas.request('early'); assert.equal(attempts, 1);
+  time++; f.nas.foreground('POST'); assert.equal(attempts, 1);
+  f.nas.foreground('HEAD'); assert.equal(attempts, 2);
+  release(f.route); await f.nas.pending; assert.equal(f.nas.summary().verified, true); f.nas.close();
+});
+
+test('snapshots never select automatically or explicitly and diagnostics discard arbitrary errors', async () => {
+  let attempts = 0;
+  const f = fixture(async () => { attempts++; return { client: null, summary: { reason: 'private-host-token' }, close() {} }; });
+  await f.nas.select(); assert.equal(f.nas.summary().reason, 'LAN_VERIFICATION_FAILED');
+  assert.equal(JSON.stringify(f.nas.summary()).includes('private'), false);
+  const copy = f.nas.snapshot(); copy.foreground('GET'); await copy.select(); assert.equal(attempts, 1);
+  assert.equal(copy.summary().automaticRetry, false); copy.close(); f.nas.close();
 });
