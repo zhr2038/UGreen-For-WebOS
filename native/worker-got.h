@@ -1,0 +1,4 @@
+#define UG_BIND_SLOT 0x3e1e34U
+#define UG_LISTEN_SLOT 0x3e1e1cU
+#define PG_BIND_SLOT 0x13ef10U
+#define PG_LISTEN_SLOT 0x13efbcU
