@@ -19,7 +19,10 @@
     }
     const G = { active: false, tab: 'timeline', album: null, albumPage: 0, group: null, groupPage: 0, category: 'figure', search: '', searchType: '8', offset: 0, data: null, filter: 'all', sort: 'date', viewer: false, index: 0, playing: false, interval: Number(store.get('photoInterval', '5')), rotation: 0, zoom: false, controls: true, generation: 0, imageGeneration: 0, loading: false, infoOpen: false, source: 'preview' };
     let slideTimer, hideTimer, preload, soundtrack, softwareMusic, musicTask, heifDecoder, musicGeneration = 0, audioGeneration = 0;
-    Object.assign(G, { uhdPreferred: store.get('photoUhd', '0') === '1', uhdJob: null, uhdActive: false, uhdNotices: new Set() });
+    // Keep the preview visible while one cancellable background task prepares
+    // the current photo. Legacy failed-conversion preferences are not reused.
+    Object.assign(G, { uhdPreferred: store.get('photoUhdBackground', '1') === '1', uhdJob: null, uhdActive: false, uhdFailures: new Set(), uhdBlockedFormats: new Set(), uhdUnavailable: false, uhdSuspended: false });
+    store.set('photoUhd', '0');
     Object.assign(G, { folder: null, folderBack: [], folderSort: 'name', folderOrder: 'asc', memory: null, mode: store.get('photoMode', 'sequential'), display: store.get('photoDisplay', 'fit'), videoRate: Number(store.get('photoVideoRate', '1')), previewOverride: null, musicEnabled: store.get('photoMusicOn', '0') === '1', musicIndex: Number(store.get('photoMusicIndex', '0')) || 0, musicTrack: null, musicItems: null, musicLoading: null, musicPosition: 0, musicError: false, dialogType: null, resumeAfterDialog: false });
     if (![2, 3, 5, 10, 15].includes(G.interval)) G.interval = 5;
     if (!['sequential', 'random', 'loop'].includes(G.mode)) G.mode = 'sequential';
@@ -55,7 +58,7 @@
       return G.musicLoading;
     }
     function syncMusic() {
-      if (!G.active || !G.viewer || !G.ready || !G.playing || document.hidden || $('#photo-clip') || (G.uhdJob || G.uhdActive) && !hasSoftwareMusic() || !G.musicEnabled || G.musicError) { stopMusic(); return; }
+      if (!G.active || !G.viewer || !G.ready || !G.playing || document.hidden || $('#photo-clip') || (G.uhdJob?.video || G.uhdActive) && !hasSoftwareMusic() || !G.musicEnabled || G.musicError) { stopMusic(); return; }
       if (!G.musicTrack) { if (G.musicItems?.length === 0) return; musicList().then(items => { if (items?.length) syncMusic(); }).catch(() => { G.musicError = true; toast('背景音乐暂时无法读取，照片继续播放。'); }); return; }
       if (hasSoftwareMusic()) {
         if (soundtrack) { stopMusic(); soundtrack = null; }
@@ -86,7 +89,7 @@
       fetch(job.closeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: job.remote.id }), signal: controller.signal, keepalive: true }).catch(() => {}).finally(() => clearTimeout(timer));
     }
     function releaseUhdJob(job) {
-      if (!job) return; job.controller.abort(); clearTimeout(job.frameTimer); clearTimeout(job.presentationTimer);
+      if (!job) return; job.controller.abort(); clearTimeout(job.frameTimer); clearTimeout(job.presentationTimer); clearTimeout(job.deadline);
       try { if (job.frameCallback != null) job.video?.cancelVideoFrameCallback?.(job.frameCallback); } catch {}
       if (job.video) {
         const clip = job.video, ownsLease = clip.dataset.cloudframePhotoLease === job.planeLease;
@@ -103,11 +106,12 @@
       closeUhdRemote(job);
     }
     function stopUhd(restore = true) {
+      clearTimeout(G.backgroundTimer);
       const job = G.uhdJob; G.uhdJob = null; G.uhdActive = false;
       document.body.classList.remove('photo-uhd-presenting'); $('.photo-viewer')?.classList.remove('photo-uhd-presenting');
       if (job) { releaseUhdJob(job); heifDecoder?.cancel?.(); }
       if (restore && $('#photo-full')) $('#photo-full').style.visibility = '';
-      $('#photo-uhd-status')?.remove(); if ($('#photo-uhd')) $('#photo-uhd').textContent = '4K 视频显示';
+      $('#photo-uhd-status')?.remove(); if ($('#photo-uhd')) { $('#photo-uhd').textContent = '4K 视频显示'; $('#photo-uhd').removeAttribute('aria-busy'); }
       for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = false;
     }
     function uhdStatus(text) {
@@ -118,30 +122,44 @@
     function heifHook() {
       if (typeof decodeImage === 'function') return decodeImage;
       if (typeof window.createPhotoHeifDecoder !== 'function') return undefined;
-      return (blob, options) => { heifDecoder ||= window.createPhotoHeifDecoder(); return heifDecoder.decode(blob, options); };
+      return (blob, options) => { heifDecoder ||= window.createPhotoHeifDecoder({ maxPixels: 50_000_000, memoryBytes: 384 * 1024 * 1024 }); return heifDecoder.decode(blob, options); };
+    }
+    const uhdKey = p => p.original + ':' + G.display;
+    function rememberUhdFailure(p, error) {
+      G.uhdFailures.add(uhdKey(p)); while (G.uhdFailures.size > 64) G.uhdFailures.delete(G.uhdFailures.values().next().value);
+      if (error.code === 'IMAGE_DECODE_UNSUPPORTED') G.uhdBlockedFormats.add(p.format);
+      if (['ENCODER_UNAVAILABLE', 'ENCODER_UNSUPPORTED', 'CODEC_UNSUPPORTED'].includes(error.code)) G.uhdUnavailable = true;
+    }
+    function prepareInBackground(p) {
+      clearTimeout(G.backgroundTimer);
+      if (!G.uhdPreferred || G.uhdUnavailable || G.uhdSuspended || G.uhdFailures.has(uhdKey(p)) || G.uhdBlockedFormats.has(p.format) || p.format === 'gif' || !p.original || p.kind !== 'image') return;
+      const generation = G.imageGeneration;
+      G.backgroundTimer = setTimeout(() => { if (G.active && G.viewer && !G.infoOpen && generation === G.imageGeneration && !G.rotation && !G.zoom && !G.uhdJob && !document.hidden) startUhd(p, true); }, 350);
     }
     async function startUhd(p, automatic = false) {
       if (!G.active || !G.viewer || !p.original || p.kind !== 'image' || $('#photo-clip') || document.hidden) return;
       const pipeline = uhdPipeline || window.PhotoUhdPipeline;
       if (!pipeline?.encodeOriginal) { if (!automatic) toast('4K 编码模块尚未加载'); return; }
-      stopUhd(); clearTimeout(slideTimer); if (!hasSoftwareMusic()) stopMusic();
-      G.rotation = 0; G.zoom = false; transform();
+      stopUhd(); if (!automatic) { clearTimeout(slideTimer); if (!hasSoftwareMusic()) stopMusic(); G.rotation = 0; G.zoom = false; transform(); }
       let originalURL;
-      try { originalURL = new URL(asset(p.original)); } catch { uhdStatus('原图链接不可用，继续使用照片显示'); schedule(); syncMusic(); return; }
+      try { originalURL = new URL(asset(p.original)); } catch { rememberUhdFailure(p, {}); if (!automatic) { uhdStatus('原图链接不可用，继续使用照片显示'); schedule(); syncMusic(); } return; }
       const client = originalURL.searchParams.get('client');
       const uploadURL = new URL('/api/photos/uhd', originalURL); uploadURL.searchParams.set('asset', originalURL.pathname.split('/').pop()); uploadURL.searchParams.set('client', client);
       const closeURL = new URL('/api/photos/uhd/close', originalURL); closeURL.searchParams.set('client', client);
-      const job = { controller: new AbortController(), generation: G.imageGeneration, remote: null, video: null, closeUrl: closeURL.href };
+      const job = { controller: new AbortController(), generation: G.imageGeneration, remote: null, video: null, closeUrl: closeURL.href, automatic };
       G.uhdJob = job;
       const current = () => G.active && G.viewer && G.uhdJob === job && G.imageGeneration === job.generation && !job.controller.signal.aborted && !document.hidden;
-      if ($('#photo-uhd')) $('#photo-uhd').textContent = '取消 4K 准备';
-      for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = true;
-      uhdStatus('正在从原图生成 4K 视频…' + (G.musicEnabled && !hasSoftwareMusic() ? ' 背景音乐已暂停' : ''));
+      job.deadline = setTimeout(() => { if (!current()) return; rememberUhdFailure(p, { code: 'PIPELINE_TIMEOUT' }); stopUhd(); if (!automatic) { uhdStatus('4K 照片准备超时，已恢复照片显示'); schedule(); showControls(); } syncMusic(); }, 45000);
+      if ($('#photo-uhd')) { $('#photo-uhd').textContent = automatic ? '自动 4K' : '取消 4K 准备'; $('#photo-uhd').setAttribute('aria-busy', 'true'); }
+      if (!automatic) for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = true;
       try {
         let width = p.width, height = p.height;
         if ((!width || !height) && p.info) { const detail = await api(p.info, undefined, job.controller.signal); width = detail.item?.width; height = detail.item?.height; }
         if (!current()) return;
-        const encoded = await pipeline.encodeOriginal(originalURL.href, { expectedWidth: width, expectedHeight: height, width: 3840, height: 2160, durationMs: 15000, fit: G.display === 'fill' ? 'cover' : 'contain', hardwareAcceleration: 'no-preference', signal: job.controller.signal, decodeImage: heifHook() });
+        const encoded = await pipeline.encodeOriginal(originalURL.href, { expectedWidth: width, expectedHeight: height, width: 3840, height: 2160, durationMs: 15000, fit: G.display === 'fill' ? 'cover' : 'contain', hardwareAcceleration: 'no-preference', signal: job.controller.signal, decodeImage: heifHook(), onProgress(progress) {
+          if (!current()) return;
+          job.progress = progress;
+        } });
         if (!current()) return;
         const uploading = new AbortController(), timeout = setTimeout(() => uploading.abort(), 30000);
         let reply;
@@ -152,6 +170,7 @@
         if (!/^[a-f0-9]{40}$/.test(reply?.id || '') || typeof reply.url !== 'string') throw new Error('Invalid UHD response');
         job.remote = reply; if (!current()) { closeUhdRemote(job); return; }
         const mediaURL = new URL(reply.url, originalURL); if (mediaURL.origin !== originalURL.origin || !/^\/photo-uhd\/[a-f0-9]{40}$/.test(mediaURL.pathname)) throw new Error('Invalid UHD URL'); mediaURL.searchParams.set('client', client); const url = mediaURL.href;
+        if (!hasSoftwareMusic()) stopMusic();
         const clip = acquirePlane(job); job.video = clip; job.mediaUrl = url;
         await new Promise((resolve, reject) => {
           const failed = () => reject(Object.assign(new Error('UHD video failed'), { code: 'VIDEO_FORMAT_UNSUPPORTED' }));
@@ -170,32 +189,33 @@
           clip.src = url; clip.load(); clip.play().then(() => { started = true; ready(); }).catch(error => { if (error.name !== 'AbortError') failed(); });
         });
         if (!current()) { releaseUhdJob(job); return; }
-        clip.pause(); clip.onloadeddata = null; clip.onerror = () => { if (G.uhdJob === job) { stopUhd(); uhdStatus('4K 视频暂不可用，已恢复照片显示'); if (G.playing) { schedule(); syncMusic(); } } };
+        clip.pause(); clip.onloadeddata = null; clip.onerror = () => { if (G.uhdJob === job) { rememberUhdFailure(p, {}); stopUhd(); if (!automatic) uhdStatus('4K 视频暂不可用，已恢复照片显示'); if (G.playing) { if (!automatic) schedule(); syncMusic(); } } };
+        clearTimeout(job.deadline);
         G.uhdActive = true; if ($('#photo-full')) $('#photo-full').style.visibility = 'hidden';
         document.body.classList.add('photo-uhd-presenting'); $('.photo-viewer')?.classList.add('photo-uhd-presenting');
         if ($('#photo-view-error')) $('#photo-view-error').replaceChildren();
         if ($('#photo-view-loading')) $('#photo-view-loading').style.display = 'none';
-        for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = true;
-        if ($('#photo-uhd')) $('#photo-uhd').textContent = '返回照片显示';
-        uhdStatus('4K 视频显示 · 有损视频编码，颜色可能与原图不同' + (p.format === 'gif' ? ' · 动图使用静态首帧' : '') + (encoded.report?.sourceUpscaled ? ' · 原图较小，放大不会增加细节' : encoded.report?.intermediateUpscaled ? ' · 画面经过放大，不会增加细节' : '') + (G.musicEnabled ? hasSoftwareMusic() ? ' · 背景音乐启用' : ' · 背景音乐已暂停' : ''));
-        G.ready = true; schedule(); syncMusic(); showControls();
+        if (!automatic) for (const id of ['photo-rotate', 'photo-zoom']) if ($('#' + id)) $('#' + id).disabled = true;
+        if ($('#photo-uhd')) { $('#photo-uhd').textContent = automatic ? '4K 照片显示' : '返回照片显示'; $('#photo-uhd').removeAttribute('aria-busy'); $('#photo-uhd').title = '有损视频显示，颜色可能与原图不同'; }
+        if (!automatic) uhdStatus('4K 视频显示 · 有损视频编码，颜色可能与原图不同' + (p.format === 'gif' ? ' · 动图使用静态首帧' : '') + (encoded.report?.sourceUpscaled ? ' · 原图较小，放大不会增加细节' : encoded.report?.intermediateUpscaled ? ' · 画面经过放大，不会增加细节' : '') + (G.musicEnabled ? hasSoftwareMusic() ? ' · 背景音乐启用' : ' · 背景音乐已暂停' : ''));
+        G.ready = true; if (!automatic) { schedule(); showControls(); } syncMusic();
       } catch (error) {
         if (current()) {
-          stopUhd();
-          const text = error.code === 'IMAGE_DECODE_UNSUPPORTED' ? '此原图格式暂不能生成 4K 视频，可使用照片预览或系统查看' : '4K 视频准备失败，已恢复照片显示';
-          uhdStatus(text); const key = p.format + ':' + (error.code || error.name);
-          if (!automatic || !G.uhdNotices.has(key)) toast(text); G.uhdNotices.add(key);
-          schedule(); syncMusic();
+          rememberUhdFailure(p, error); stopUhd();
+          const reasons = { IMAGE_DECODE_UNSUPPORTED: '此原图格式暂不能生成 4K 视频，可使用照片预览或系统查看', HEIF_TOO_LARGE: '原图尺寸超过 4K 处理上限，继续显示照片', SOURCE_TOO_LARGE: '原图文件或尺寸超过 4K 处理上限，继续显示照片', HEIF_MEMORY_LIMIT: '原图解码内存不足，继续显示照片', HEIF_TIMEOUT: '原图解码超时，继续显示照片', ORIGINAL_TIMEOUT: '原图读取超时，继续显示照片', ORIGINAL_READ_FAILED: '原图读取失败，继续显示照片', ENCODER_UNAVAILABLE: '当前电视不支持 4K 照片编码，继续显示照片', ENCODER_UNSUPPORTED: '当前电视不支持此 4K 编码配置，继续显示照片', ENCODE_TIMEOUT: '4K 编码超时，继续显示照片', PIPELINE_TIMEOUT: '原图处理超时，继续显示照片' };
+          const text = reasons[error.code] || '4K 视频准备失败，已恢复照片显示';
+          if (!automatic) { uhdStatus(text); toast(text); schedule(); }
+          syncMusic();
         }
       } finally { clearTimeout(job.frameTimer); if (!current()) releaseUhdJob(job); }
     }
     function stopMedia() {
-      clearTimeout(slideTimer); clearTimeout(hideTimer); ++G.imageGeneration;
+      clearTimeout(slideTimer); clearTimeout(hideTimer); clearTimeout(G.videoWatchdog); ++G.imageGeneration;
       stopUhd();
       cancelVideoCandidate(false);
       if (G.videoSession) { const { id, connection } = G.videoSession; G.videoSession = null; api('/api/photos/video/close', { id }, undefined, connection).catch(() => {}); }
       const clip = $('#photo-clip');
-      if (clip) { clip.onplay = clip.onpause = clip.onloadeddata = clip.onended = clip.onerror = null; clip.pause(); clip.removeAttribute('src'); clip.load(); }
+      if (clip) { clip.onplay = clip.onpause = clip.onplaying = clip.onwaiting = clip.onstalled = clip.ontimeupdate = clip.onloadeddata = clip.onended = clip.onerror = null; clip.pause(); clip.removeAttribute('src'); clip.load(); }
       if (preload) { preload.onload = preload.onerror = null; preload.src = ''; preload = null; }
     }
     function leave() { G.active = false; G.playing = false; G.viewer = false; G.infoOpen = false; G.previewOverride = null; ++G.generation; ++musicGeneration; G.musicLoading = null; stopMedia(); stopMusic(); softwareMusic?.dispose().catch(() => {}); softwareMusic = null; heifDecoder?.dispose?.(); heifDecoder = null; }
@@ -278,11 +298,11 @@
       if (!G.viewer) return;
       G.controls = true; $('.photo-viewer')?.classList.remove('clean');
       clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => { if (G.viewer && !G.infoOpen && (!G.uhdJob || G.uhdActive) && !$('#photo-view-error')?.textContent) { G.controls = false; $('.photo-viewer')?.classList.add('clean'); } }, 5000);
+      hideTimer = setTimeout(() => { if (G.viewer && !G.infoOpen && (!G.uhdJob || G.uhdActive || G.uhdJob.automatic) && !$('#photo-view-error')?.textContent) { G.controls = false; $('.photo-viewer')?.classList.add('clean'); } }, 5000);
     }
     function schedule() {
       clearTimeout(slideTimer);
-      if (G.ready && G.playing && G.viewer && G.active && !document.hidden && !$('#photo-clip') && (!G.uhdJob || G.uhdActive)) slideTimer = setTimeout(() => step(1, true), G.interval * 1000);
+      if (G.ready && G.playing && G.viewer && G.active && !document.hidden && !$('#photo-clip') && (!G.uhdJob || G.uhdActive || G.uhdJob.automatic)) slideTimer = setTimeout(() => step(1, true), G.interval * 1000);
     }
     function setSlideshow(playing) {
       G.playing = playing;
@@ -330,6 +350,7 @@
       focus($('#' + (returnFocus || 'photo-info'))); showControls();
       if (G.active && G.viewer && !document.hidden) { if (resume) setSlideshow(true); else if (resumeClip && $('#photo-clip')) $('#photo-clip').play().catch(() => {}); }
       if (G.uhdNeedsRerender && G.uhdPreferred && G.viewer) { G.uhdNeedsRerender = false; startUhd(G.previewOverride || G.data.items[G.index], true); }
+      else if (G.uhdPreferred && G.viewer && !G.uhdJob) prepareInBackground(G.previewOverride || G.data.items[G.index]);
     }
     function settingsLabel(key) {
       if (key === 'interval') return `时长：${G.interval} 秒`;
@@ -458,7 +479,7 @@
       } catch (error) { if (current()) $('#photo-info-content').textContent = error.message; }
     }
     function openViewer(index, playing = false, source = 'preview') {
-      stopMedia(); G.viewer = true; G.index = index; G.playing = playing; G.rotation = 0; G.zoom = false; G.loading = false; G.ready = false; G.infoOpen = false; G.source = source;
+      stopMedia(); G.viewer = true; G.index = index; G.playing = playing; G.rotation = 0; G.zoom = false; G.loading = false; G.ready = false; G.infoOpen = false; G.source = source; G.uhdSuspended = false;
       const item = G.data.items[index]; if (G.previewOverride?.id !== item.id) G.previewOverride = null;
       const p = G.previewOverride || item, isVideo = !(p.sensitive && !p.revealed) && (p.kind === 'video' || (source === 'live' && p.motion));
       if (isVideo) stopMusic();
@@ -484,13 +505,13 @@
       if (!isVideo && p.kind === 'image' && p.original) {
         const uhdButton = document.createElement('button'); uhdButton.id = 'photo-uhd'; uhdButton.textContent = '4K 视频显示'; $('#photo-info').before(uhdButton);
         uhdButton.onclick = () => {
-          if (G.uhdJob) { G.uhdPreferred = false; store.set('photoUhd', '0'); stopUhd(); schedule(); syncMusic(); }
-          else { G.uhdPreferred = true; store.set('photoUhd', '1'); startUhd(p); }
+          if (G.uhdJob) { G.uhdPreferred = false; store.set('photoUhdBackground', '0'); stopUhd(); schedule(); syncMusic(); }
+          else { G.uhdPreferred = true; G.uhdSuspended = false; G.uhdUnavailable = false; G.uhdBlockedFormats.delete(p.format); G.uhdFailures.delete(uhdKey(p)); store.set('photoUhdBackground', '1'); startUhd(p); }
           showControls();
         };
       }
       if ($('#photo-original')) $('#photo-original').onclick = () => {
-        G.uhdPreferred = false; store.set('photoUhd', '0'); stopUhd();
+        G.uhdPreferred = false; store.set('photoUhdBackground', '0'); stopUhd();
         if (isOriginal) return openViewer(index);
         if (p.output?.browserOriginalCandidate === false) { toast(`${p.format?.toUpperCase() || '此格式'} 原图暂不能在当前查看器中显示，请使用预览图。`); showControls(); return; }
         openViewer(index, false, 'original');
@@ -499,14 +520,17 @@
       if ($('#photo-native')) $('#photo-native').onclick = () => { setSlideshow(false); stopUhd(); Promise.resolve(nativePhotoViewer({ ...p, url: asset(p.original) })).catch(e => toast(e.message)); };
       $('#photo-interval').onclick = () => { changeSetting('interval'); showControls(); };
       const imageGeneration = ++G.imageGeneration;
-      const failure = () => {
+      const failure = (reason) => {
         if (!G.active || imageGeneration !== G.imageGeneration) return;
         if (!isVideo && G.uhdActive) { $('#photo-view-loading').style.display = 'none'; $('#photo-view-error').replaceChildren(); return; }
-        G.playing = false; stopMusic(); clearTimeout(slideTimer); $('#photo-view-loading').style.display = 'none';
+        G.playing = false; stopMusic(); clearTimeout(slideTimer); clearTimeout(G.videoWatchdog); $('#photo-view-loading').style.display = 'none';
         $('#photo-slideshow').textContent = '播放幻灯片';
-        $('#photo-view-error').innerHTML = `<p>${isVideo ? '电视无法播放这个视频，可能是编码不受支持。' : isOriginal ? '原图无法显示，可能是文件格式或尺寸不受电视支持。' : '照片加载失败，请检查 NAS 连接。'}</p>${isOriginal ? '<button id="photo-preview-fallback">使用预览图</button>' : ''}<button id="photo-view-retry">重试</button><button id="photo-error-back">返回列表</button>`;
+        const mediaError = $('#photo-clip')?.error?.code;
+        const videoError = reason === 'timeout' ? '视频加载超时，请检查连接或尝试其他画质。' : mediaError === 2 ? '视频读取失败，请检查 NAS 连接或尝试其他画质。' : '电视无法播放这个视频，可尝试其他画质。';
+        $('#photo-view-error').innerHTML = `<p>${isVideo ? videoError : isOriginal ? '原图无法显示，可能是文件格式或尺寸不受电视支持。' : '照片加载失败，请检查 NAS 连接。'}</p>${isOriginal ? '<button id="photo-preview-fallback">使用预览图</button>' : ''}${isVideo && source !== 'live' && p.stream ? '<button id="photo-error-quality">选择画质</button>' : ''}<button id="photo-view-retry">重试</button><button id="photo-error-back">返回列表</button>`;
         $('#photo-view-retry').onclick = retryViewer; $('#photo-error-back').onclick = closeViewer; showControls(); focus($('#photo-error-back'));
         if ($('#photo-preview-fallback')) $('#photo-preview-fallback').onclick = () => openViewer(index);
+        if ($('#photo-error-quality')) $('#photo-error-quality').onclick = () => openQuality(p);
       };
       if (isVideo) {
         const clip = $('#photo-clip');
@@ -519,18 +543,21 @@
         $('#photo-video-pause').onclick = () => { if (clip.paused) clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); else clip.pause(); showControls(); };
         clip.onplay = () => { if (G.active && imageGeneration === G.imageGeneration && $('#photo-video-pause')) $('#photo-video-pause').textContent = '暂停视频'; };
         clip.onpause = () => { if (G.active && imageGeneration === G.imageGeneration && $('#photo-video-pause')) $('#photo-video-pause').textContent = '播放视频'; };
-        clip.onloadeddata = () => { if (imageGeneration === G.imageGeneration) $('#photo-view-loading').style.display = 'none'; };
+        const loaded = () => { if (G.active && imageGeneration === G.imageGeneration && clip.readyState >= 2 && !clip.error) { G.ready = true; $('#photo-view-loading').style.display = 'none'; $('#photo-view-error').replaceChildren(); } };
+        const watch = () => { clearTimeout(G.videoWatchdog); G.videoWatchdog = setTimeout(() => { if (G.active && G.viewer && !G.infoOpen && imageGeneration === G.imageGeneration && !document.hidden && !clip.paused && !clip.ended) failure('timeout'); }, 20000); };
+        clip.onloadeddata = loaded; clip.onplaying = () => { clearTimeout(G.videoWatchdog); loaded(); };
+        clip.onwaiting = clip.onstalled = watch; clip.ontimeupdate = () => { if (clip.currentTime > 0) { clearTimeout(G.videoWatchdog); loaded(); } };
         clip.onended = () => { if (!G.active || imageGeneration !== G.imageGeneration) return; if (G.playing) step(1, true); else if (source === 'live') openViewer(index); else showControls(); }; clip.onerror = failure;
         const stream = source === 'live' ? p.motion : p.stream;
-        if (stream) { clip.src = asset(stream); clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); } else failure();
+        if (stream) { watch(); clip.src = asset(stream); clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); } else failure();
       } else {
         const img = $('#photo-full'); img.alt = p.name;
-        $('#photo-rotate').onclick = () => { G.rotation = (G.rotation + 90) % 360; transform(); showControls(); };
-        $('#photo-zoom').onclick = () => { G.zoom = !G.zoom; transform(); showControls(); };
+        $('#photo-rotate').onclick = () => { G.uhdSuspended = true; stopUhd(); G.rotation = (G.rotation + 90) % 360; transform(); showControls(); };
+        $('#photo-zoom').onclick = () => { G.uhdSuspended = true; stopUhd(); G.zoom = !G.zoom; transform(); showControls(); };
         img.onload = () => {
           if (!G.active || imageGeneration !== G.imageGeneration) return;
           G.ready = true; $('#photo-view-loading').style.display = 'none';
-          if (G.uhdPreferred && p.original && !G.uhdJob) startUhd(p, true);
+          if (G.uhdPreferred && p.original && !G.uhdJob) prepareInBackground(p);
           schedule(); syncMusic();
           const next = G.data.items[index + 1];
           if (next?.kind === 'image') { preload = new Image(); preload.src = asset(next.view); }
@@ -604,7 +631,7 @@
     document.addEventListener('mousemove', () => { if (G.active && G.viewer) showControls(); });
     document.addEventListener('visibilitychange', () => {
       if (!G.active || !document.hidden) return;
-      G.playing = false; clearTimeout(slideTimer); $('#photo-clip')?.pause();
+      G.playing = false; clearTimeout(slideTimer); clearTimeout(G.videoWatchdog); $('#photo-clip')?.pause();
       stopUhd(); stopMusic();
       if ($('#photo-slideshow')) $('#photo-slideshow').textContent = '播放幻灯片';
     });

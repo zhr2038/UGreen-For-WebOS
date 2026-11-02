@@ -2,9 +2,9 @@
 
 在 LG 电视上使用绿联 NAS 的影视中心和相册：海报墙、影片资料、收藏、继续观看、照片浏览和幻灯片。
 
-**v0.5.0 接入电视本机原生 P2P，默认仍优先使用受信局域网 HTTPS。** 支持 UGREENlink 直接登录、NAS 动态画质、字幕设置和 4K 照片查看，NAS 不需要安装 Docker 容器。输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
+**v0.5.1 修复相册连接停留在旧中继、照片反复转换和视频缓冲问题，支持按需处理 4800 万像素 HEIC。** 原生 P2P 保留，默认优先使用受信局域网 HTTPS。支持 UGREENlink 直接登录、NAS 动态画质、字幕设置和 4K 照片查看，NAS 不需要安装 Docker 容器。输入 UGREENlink ID 和 NAS 用户名、密码，或用手机「绿联云」App 扫码确认。
 
-**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.5.0) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [本版更新](docs/CHANGELOG-0.5.0.md) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
+**[下载安装包](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.5.1) · [安装到另一台 LG 电视](#second-tv) · [登录说明](#login) · [本版更新](docs/CHANGELOG-0.5.1.md) · [旧版 NAS 服务教程](docs/LEGACY-BRIDGE.md)**
 
 个人使用的非官方客户端，与绿联、LG 没有官方合作关系。项目使用未公开 UGOS 接口，固件或手机 App 升级后可能需要适配。
 
@@ -28,7 +28,7 @@
 
 ### 1. 下载电视安装包
 
-在电脑打开 [v0.5.0 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.5.0)，下载：
+在电脑打开 [v0.5.1 下载页](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.5.1)，下载：
 
 ```text
 CloudFrame.ipk
@@ -36,7 +36,7 @@ CloudFrame.ipk
 
 安装包文件名为 **CloudFrame.ipk**，电视首页的中文应用名为 **云映**。使用 UGREENlink 登录时不需要下载服务端 ZIP，也不需要编译源码。
 
-**v0.5.0 电视端要求 Node.js 20 运行时，当前支持基线为 webOS 26。** 实机验证机型是 LG C5（OLED42C5PCA.ACNQLJD，固件 43.21.96、SDK 11.2.0、Node.js 20.12.2）。webOS 24 / 25 的 Node 16 缺少新版相册所用的取消 API，不能直接视为本版支持；旧电视可先保留 [v0.3.1](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，其整机兼容性也需按型号验证。4K 照片还需要电视实际支持 WebCodecs 编码，普通预览不依赖这项能力。运行时版本可查 [LG 官方说明](https://webostv.developer.lge.com/develop/guides/js-service-basics)。本项目不是 Android APK，不支持 NetCast 电视。
+**v0.5.1 电视端要求 Node.js 20 运行时，当前支持基线为 webOS 26。** 实机验证机型是 LG C5（OLED42C5PCA.ACNQLJD，固件 43.21.96、SDK 11.2.0、Node.js 20.12.2）。webOS 24 / 25 的 Node 16 缺少新版相册所用的取消 API，不能直接视为本版支持；旧电视可先保留 [v0.3.1](https://github.com/zhr2038/UGreen-For-WebOS/releases/tag/v0.3.1)，其整机兼容性也需按型号验证。照片先直接显示，后台静默准备完成后自动变清晰，不显示转换进度或弹窗；切图、旋转和幻灯片优先响应。失败保留照片并抑制重复尝试，GIF 保持动画。工具栏可返回普通显示或手动重试。4800 万像素 HEIC 在 C5 上准备约 13 秒。4K 照片还需要电视实际支持 WebCodecs 编码，普通预览不依赖这项能力。运行时版本可查 [LG 官方说明](https://webostv.developer.lge.com/develop/guides/js-service-basics)。本项目不是 Android APK，不支持 NetCast 电视。
 
 ### 2. 在电视开启 Developer Mode
 
@@ -150,6 +150,6 @@ python tools/check-tv-package.py
 
 `package:tv` 会构建二维码、播放轨道资源、惰性加载的 HEIF Worker 资源和电视 JS 服务，一起打入 `dist/CloudFrame.ipk`。服务不携带 `sharp` 或 Android 私有 SDK，也不需要 root 电视。HEIF 使用 libheif-js / libheif / libde265 的 WebAssembly，随包保留许可；本版发布页另附对应源码包。
 
-服务测试、模拟界面测试与真实电视验证的范围见 [v0.5.0 变更与验证记录](docs/CHANGELOG-0.5.0.md)，上一版见 [v0.4.1](docs/BUGFIX-0.4.1.md)。播放器和相册界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=19-56)。
+服务测试、模拟界面测试与真实电视验证的范围见 [v0.5.1 变更与验证记录](docs/CHANGELOG-0.5.1.md)，上一版见 [v0.5.0](docs/CHANGELOG-0.5.0.md)。播放器和相册界面设计见 [Figma](https://www.figma.com/design/CcZn2Sp9cpxc9JPf1eNoZV?node-id=19-56)。
 
 旧版可选 Docker 服务仍保留源码，供兼容模式使用。开发调试脚本、原始 Android APK、个人 NAS 地址、账号密码、会话、电视开发密钥和照片均不应提交到仓库或打进发布包。

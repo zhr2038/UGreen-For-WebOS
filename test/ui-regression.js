@@ -131,7 +131,9 @@ async page => {
   await run('离开详情后，迟到的播放请求不会自动打开影片', async () => {
     await detail(); const gate = deferred(); control.gates.push(gate); control.playGate = gate; await page.locator('#play').click(); await page.locator('#play').click();
     check(control.calls.filter(c => c.path === '/api/play').length === 1, 'Repeated confirmation started duplicate playback requests');
-    await page.keyboard.press('Escape'); await page.waitForSelector('h1'); gate.resolve(); await delay(150);
+    // Returning to a scrolled shelf intentionally keeps the header hidden.
+    // The active home route is the navigation contract under test here.
+    await page.keyboard.press('Escape'); await page.waitForSelector('.nav [data-route="home"].active'); gate.resolve(); await delay(150);
     check(!await page.locator('body').evaluate(b => b.classList.contains('playing')), 'Stale play request changed the route');
   });
   await run('配对失败后仍可使用原有 NAS', async () => {

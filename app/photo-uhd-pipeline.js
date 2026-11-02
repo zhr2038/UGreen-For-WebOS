@@ -6,6 +6,7 @@
     constructor(code, message) { super(message); this.name = 'PhotoUhdError'; this.code = code; }
   }
   const fail = (code, message) => new PhotoUhdError(code, message);
+  const progress = (callback, value) => { try { callback?.(value); } catch {} };
   function bounded(operation, { milliseconds, signal, late = () => {} } = {}) {
     return new Promise((resolve, reject) => {
       let done = false, timer;
@@ -60,19 +61,28 @@
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.hash || !/^\/photo-original\/[0-9a-f]{40}$/.test(url.pathname)) throw fail('ORIGINAL_REQUIRED', 'UHD 编码只接受本机已授权原图链接');
     return url.href;
   }
-  async function fetchOriginal(value, { signal, maxBytes = 32 * 1024 * 1024 } = {}) {
+  async function fetchOriginal(value, { signal, maxBytes = 32 * 1024 * 1024, timeoutMs = 30000, onProgress } = {}) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 32 * 1024 * 1024) throw fail('INVALID_OPTIONS', '原图读取上限无效');
-    const controller = new AbortController(), abort = () => controller.abort(), timer = setTimeout(abort, 30000);
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw fail('INVALID_OPTIONS', '原图读取超时参数无效');
+    let timedOut = false;
+    const controller = new AbortController(), abort = () => controller.abort(), timer = setTimeout(() => { timedOut = true; abort(); }, timeoutMs);
     signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
     try {
       const response = await fetch(originalUrl(value), { signal: controller.signal, cache: 'no-store', redirect: 'error' });
       if (response.status !== 200 || !response.body) { await response.body?.cancel(); throw fail('ORIGINAL_READ_FAILED', '原图读取失败'); }
       if (Number(response.headers.get('content-length')) > maxBytes) { await response.body.cancel(); throw fail('SOURCE_TOO_LARGE', '原图超过本机编码的内存上限'); }
-      const reader = response.body.getReader(), parts = []; let length = 0;
-      try { while (true) { const next = await reader.read(); if (next.done) break; length += next.value.byteLength; if (length > maxBytes) throw fail('SOURCE_TOO_LARGE', '原图超过本机编码的内存上限'); parts.push(next.value); } }
+      const reader = response.body.getReader(), parts = [], total = Number(response.headers.get('content-length')) || 0; let length = 0, lastProgress = 0;
+      progress(onProgress, { stage: 'download', loaded: 0, total });
+      try { while (true) { const next = await reader.read(); if (next.done) break; length += next.value.byteLength; if (length > maxBytes) throw fail('SOURCE_TOO_LARGE', '原图超过本机编码的内存上限'); parts.push(next.value); if (performance.now() - lastProgress >= 200) { lastProgress = performance.now(); progress(onProgress, { stage: 'download', loaded: length, total }); } } }
       catch (error) { await reader.cancel().catch(() => {}); throw error; }
       finally { reader.releaseLock(); }
+      if (!length || total && length !== total) throw fail('ORIGINAL_READ_FAILED', '原图读取不完整');
+      progress(onProgress, { stage: 'download', loaded: length, total });
       return new Blob(parts, { type: response.headers.get('content-type')?.split(';')[0] || 'application/octet-stream' });
+    } catch (error) {
+      if (signal?.aborted) throw new DOMException('Operation aborted', 'AbortError');
+      if (timedOut) throw fail('ORIGINAL_TIMEOUT', '原图读取超时');
+      throw error;
     } finally { controller.abort(); clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
   function dimensions(bytes) {
@@ -103,13 +113,14 @@
     if (!supported.supported) throw fail('ENCODER_UNSUPPORTED', '浏览器不支持请求的 UHD AVC 编码配置');
     return supported.config;
   }
-  async function encodeStill(original, { expectedWidth, expectedHeight, width = 3840, height = 2160, durationMs = 15000, fit = 'contain', signal, timeoutMs = 30000, codec, hardwareAcceleration, bitrate, decodeImage } = {}) {
+  async function encodeStill(original, { expectedWidth, expectedHeight, width = 3840, height = 2160, durationMs = 15000, fit = 'contain', signal, timeoutMs = 30000, codec, hardwareAcceleration, bitrate, decodeImage, onProgress } = {}) {
     if (!(original instanceof Blob) || !original.size || original.size > 32 * 1024 * 1024) throw fail('SOURCE_TOO_LARGE', '原图为空或超过 32MB 编码上限');
-    if (!['contain', 'cover'].includes(fit) || width !== 3840 || height !== 2160 || !Number.isSafeInteger(durationMs) || durationMs < 1000 || durationMs > 60000 || !Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000) throw fail('INVALID_OPTIONS', 'UHD 静态视频参数无效');
+    if (!['contain', 'cover'].includes(fit) || width !== 3840 || height !== 2160 || !Number.isSafeInteger(durationMs) || durationMs < 1000 || durationMs > 60000 || !Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw fail('INVALID_OPTIONS', 'UHD 静态视频参数无效');
     checkPixels(expectedWidth, expectedHeight);
     if (signal?.aborted) throw new DOMException('Operation aborted', 'AbortError');
     const pipelineStarted = performance.now(), remaining = () => Math.max(1, timeoutMs - (performance.now() - pipelineStarted));
     const config = await encoderConfig({ codec, width, height, hardwareAcceleration, bitrate }, { signal, milliseconds: Math.min(3000, remaining()) });
+    progress(onProgress, { stage: 'decode' });
     let image, decodedCleanup, decoder, canvas, encoder, frame, timer, abortListener;
     const started = performance.now();
     try {
@@ -157,6 +168,7 @@
         },
         error(error) { encodingError = error; reportError(); },
       });
+      progress(onProgress, { stage: 'encode' });
       encoder.configure(config); frame = new VideoFrame(canvas, { timestamp: 0, duration: durationMs * 1000 }); encoder.encode(frame, { keyFrame: true }); frame.close(); frame = null;
       const timeout = new Promise((resolve, reject) => { timer = setTimeout(() => reject(fail('ENCODE_TIMEOUT', '原图编码超时')), remaining()); });
       const aborted = new Promise((resolve, reject) => { abortListener = () => reject(new DOMException('Operation aborted', 'AbortError')); signal?.addEventListener('abort', abortListener, { once: true }); });
@@ -170,6 +182,19 @@
       frame?.close(); if (decodedCleanup) decodedCleanup(); else image?.close?.(); decoder?.close(); if (encoder && encoder.state !== 'closed') encoder.close(); if (canvas) { canvas.width = 1; canvas.height = 1; }
     }
   }
-  async function encodeOriginal(url, options) { return encodeStill(await fetchOriginal(url, { signal: options?.signal }), options); }
+  async function encodeOriginal(url, options = {}) {
+    const { timeoutMs = 30000, signal, onProgress } = options;
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000) throw fail('INVALID_OPTIONS', '原图处理超时参数无效');
+    const started = performance.now(), controller = new AbortController(), abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
+    try {
+      progress(onProgress, { stage: 'check' });
+      await encoderConfig(options, { signal: controller.signal, milliseconds: Math.min(3000, timeoutMs) });
+      const original = await fetchOriginal(url, { signal: controller.signal, timeoutMs: Math.max(1, timeoutMs - (performance.now() - started)), onProgress });
+      const remaining = timeoutMs - (performance.now() - started);
+      if (remaining <= 0) throw fail('PIPELINE_TIMEOUT', '原图处理超时');
+      return await encodeStill(original, { ...options, signal: controller.signal, timeoutMs: remaining });
+    } finally { controller.abort(); signal?.removeEventListener('abort', abort); }
+  }
   globalThis.PhotoUhdPipeline = Object.freeze({ PhotoUhdError, originalUrl, fetchOriginal, dimensions, muxAvcStill, encoderConfig, encodeStill, encodeOriginal });
 })();

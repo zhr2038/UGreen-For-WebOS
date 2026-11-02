@@ -86,3 +86,22 @@ test('production UgOS and AdaptiveNas accounts own config and Agents and preserv
   const direct=new UgOS({server:'https://nas.invalid',token:'synthetic-a'}),photos=new Photos(direct);t.after(async()=>{await photos.clear();direct.httpsAgent.destroy();});const p=photos.present(raw,owner),stream=photos.stream(photos.get(key(p.original),owner));assert.notEqual(stream.nas.httpsAgent,direct.httpsAgent);assert.notEqual(stream.nas.config,direct.config);assert.throws(()=>{stream.nas.config.server='https://other.invalid';});
   const adaptive=new AdaptiveNas({server:'https://synthetic.zh9.ug.link',alias:'synthetic',token:'synthetic-a'});const route={origin:'https://synthetic.lan.ug.link:9443',hostname:'synthetic.lan.ug.link',address:'192.168.2.9',family:4};adaptive.snapshotRoute=route;const second=new Photos(adaptive);t.after(async()=>{await second.clear();adaptive.close();});const q=second.present(raw,owner),captured=second.stream(second.get(key(q.original),owner)).nas.snapshot();assert.notEqual(captured.httpsAgent,adaptive.httpsAgent);assert.equal(captured.route.route.address,route.address);assert.notEqual(captured.route.client.httpsAgent,adaptive.route?.client?.httpsAgent);captured.close();
 });
+
+test('photos opened before LAN discovery adopt the verified route without changing capabilities or interrupting old readers', async t => {
+  const state={next:0,calls:[],destroyed:new Set(),mode:'ugreenlink-relay'},body=new PassThrough();body.statusCode=200;body.headers={};
+  class RoutingNas extends FakeNas {
+    summary(){return {mode:this===upstream?state.mode:this.mode,verified:(this===upstream?state.mode:this.mode)==='lan-https'};}
+    snapshot(){const copy=new RoutingNas(state,this.config);copy.mode=this===upstream?state.mode:this.mode;return copy;}
+    async open(path,options){state.calls.push({id:this.id,mode:this.mode});return this.mode==='ugreenlink-relay'?body:response();}
+  }
+  const upstream=new RoutingNas(state),photos=new Photos(upstream);t.after(()=>photos.clear());
+  const p=photos.present(raw,owner),cap=key(p.original),descriptor=photos.stream(photos.get(cap,owner));
+  const old=await descriptor.nas.open(descriptor.path,{query:descriptor.query}),oldId=state.calls.at(-1).id;
+  const chunks=[],reading=(async()=>{for await(const b of old)chunks.push(b);})();body.write(Buffer.from([7]));await turn();
+  state.mode='lan-https';const fresh=await descriptor.nas.open(descriptor.path,{query:descriptor.query});
+  const received=[];for await(const b of fresh)received.push(b);
+  assert.deepEqual(Buffer.concat(received),Buffer.from([1,2,3]));assert.equal(state.calls.at(-1).mode,'lan-https');
+  assert.equal(photos.present(raw,owner).original,p.original);assert.equal(state.destroyed.has(oldId),false);assert.equal(body.destroyed,false);
+  body.end(Buffer.from([8]));await reading;assert.deepEqual(Buffer.concat(chunks),Buffer.from([7,8]));assert.equal(state.destroyed.has(oldId),true);
+  upstream.config.token='different-account';await assert.rejects(async()=>descriptor.nas.open(descriptor.path),{status:410});
+});

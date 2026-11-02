@@ -50,3 +50,30 @@ test('original fetch rejects redirects, partial bodies and chunked size overruns
     await assert.rejects(fetchOriginal(url, { maxBytes: 5 }), { code: 'SOURCE_TOO_LARGE' }); assert.equal(cancelled, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('original download reports byte progress, rejects truncated files and distinguishes timeout from caller cancellation', async () => {
+  const originalFetch=globalThis.fetch,url='http://127.0.0.1/photo-original/'+'a'.repeat(40),events=[];
+  try {
+    globalThis.fetch=async()=>new Response(new Uint8Array([1,2,3]),{headers:{'content-length':'3'}});
+    assert.equal((await fetchOriginal(url,{onProgress:value=>events.push(value)})).size,3);
+    assert.deepEqual(events.at(-1),{stage:'download',loaded:3,total:3});
+    globalThis.fetch=async()=>new Response(new Uint8Array([1,2]),{headers:{'content-length':'3'}});
+    await assert.rejects(fetchOriginal(url),{code:'ORIGINAL_READ_FAILED'});
+    let cancelled=0;
+    globalThis.fetch=async(_,options)=>new Response(new ReadableStream({start(controller){options.signal.addEventListener('abort',()=>{cancelled++;controller.error(new DOMException('Aborted','AbortError'));},{once:true});}}));
+    await assert.rejects(fetchOriginal(url,{timeoutMs:20}),{code:'ORIGINAL_TIMEOUT'});
+    const caller=new AbortController(),pending=fetchOriginal(url,{signal:caller.signal});caller.abort();await assert.rejects(pending,{name:'AbortError'});assert.equal(cancelled,2);
+  } finally {globalThis.fetch=originalFetch;}
+});
+
+test('original download and decoding share one deadline and close a late decoded image', async () => {
+  const saved=Object.fromEntries(['fetch','VideoEncoder','VideoFrame','OffscreenCanvas'].map(key=>[key,globalThis[key]]));
+  let deliver,closed=0,decodeSignal;const started=performance.now();
+  try {
+    globalThis.VideoEncoder=class{static async isConfigSupported(config){return {supported:true,config};}};globalThis.VideoFrame=class{};globalThis.OffscreenCanvas=class{};
+    globalThis.fetch=async()=>{await new Promise(r=>setTimeout(r,550));return new Response(new Uint8Array(32),{headers:{'content-type':'image/heif','content-length':'32'}});};
+    const pending=globalThis.PhotoUhdPipeline.encodeOriginal('http://127.0.0.1/photo-original/'+'a'.repeat(40),{timeoutMs:1000,expectedWidth:96,expectedHeight:64,decodeImage:(_,options)=>{decodeSignal=options.signal;return new Promise(resolve=>deliver=resolve);}});
+    await assert.rejects(pending,{code:'PIPELINE_TIMEOUT'});const elapsed=performance.now()-started;assert.ok(elapsed>=900&&elapsed<1500);assert.equal(decodeSignal.aborted,true);
+    deliver({image:{width:96,height:64},orientationApplied:true,sourceWidth:96,sourceHeight:64,close(){closed++;}});await new Promise(r=>setImmediate(r));assert.equal(closed,1);
+  } finally {for(const[key,value]of Object.entries(saved)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
+});

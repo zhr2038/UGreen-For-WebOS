@@ -29,3 +29,17 @@ test('metadata parsing is bounded and malformed EXIF falls back to no extra rota
 test('a real 12MP original is decoded before downsizing and never copied into full-size JS RGBA',{skip:!module},async()=>{
   const result=decodeHeifRgba(module,await readFile(join(fixtures,'synthetic-12mp.heic')),{expectedWidth:4032,expectedHeight:3024});assert.equal(result.sourceWidth,4032);assert.equal(result.sourceHeight,3024);assert.equal(result.width,2880);assert.equal(result.height,2160);assert.equal(result.data.byteLength,24883200);assert.ok(result.wasmHeapBytes<=256*1024*1024);
 });
+
+test('48MP HEIC opt-in decodes the full original with bounded memory and only copies a UHD-sized bitmap', {skip:!module}, async () => {
+  const bytes=await readFile(join(fixtures,'synthetic-48mp.heic'));
+  assert.throws(()=>decodeHeifRgba(module,bytes,{expectedWidth:8064,expectedHeight:6048}),{code:'HEIF_TOO_LARGE'});
+  assert.throws(()=>decodeHeifRgba(module,bytes,{expectedWidth:8064,expectedHeight:6048,maxPixels:50_000_000,memoryBytes:64*1024*1024}),{code:'HEIF_MEMORY_LIMIT'});
+  // Production uses a fresh worker/heap for every photo, including after a
+  // rejected attempt; do not measure fragmentation from preceding test images.
+  const fresh=await require(join(packageDir,'libheif-wasm/libheif.js'))({wasmBinary:await readFile(join(packageDir,'libheif-wasm/libheif.wasm')),print(){},printErr(){}});
+  const result=decodeHeifRgba(fresh,bytes,{expectedWidth:8064,expectedHeight:6048,maxPixels:50_000_000,memoryBytes:384*1024*1024});
+  assert.equal(result.sourceWidth,8064);assert.equal(result.sourceHeight,6048);assert.equal(result.width,2880);assert.equal(result.height,2160);
+  // libheif's image-allocation limit is not the allocator's reserved WASM
+  // capacity. That capacity grows in chunks and is discarded with the worker.
+  assert.equal(result.originalDecoded,true);assert.equal(result.data.byteLength,2880*2160*4);assert.ok(result.wasmHeapBytes<=512*1024*1024,`WASM capacity ${result.wasmHeapBytes}`);
+});

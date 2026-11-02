@@ -50,7 +50,7 @@ export function decodeHeifRgba(module,bytes,{maxPixels=HEIF_LIMITS.maxPixels,max
   if(module?.heif_get_version?.()!=='1.23.5')throw fail('HEIF_LIBRARY_MISMATCH','HEIF 解码库版本不匹配');
   const allocated=[],images=new Set();let context=0,handle=0;
   const alloc=size=>{const ptr=module._malloc(size);if(!ptr)throw fail('HEIF_MEMORY_LIMIT','HEIF 解码内存不足');allocated.push(ptr);return ptr;};
-  let error,out;const check=()=>{if(module.HEAP32[error>>>2]!==0)throw fail('HEIF_DECODE_FAILED','HEIF 原图解码失败或超过内存上限');};
+  let error,out;const check=()=>{const code=module.HEAP32[error>>>2];if(code===6)throw fail('HEIF_MEMORY_LIMIT','HEIF 原图解码内存不足');if(code!==0)throw fail('HEIF_DECODE_FAILED','HEIF 原图解码失败');};
   try {
     error=alloc(12);out=alloc(4);
     context=module._heif_context_alloc();if(!context)throw fail('HEIF_MEMORY_LIMIT','HEIF 解码内存不足');

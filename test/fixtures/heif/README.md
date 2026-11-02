@@ -12,4 +12,8 @@ once; `primary-second` has a magenta non-primary image before the actual chart.
 `expected.json` records dimensions and quarter-center pixel colors independently
 from the decoder, using Pillow's documented transpose operations.
 
+The `--large` option adds synthetic 4032×3024 and 8064×6048 charts. The 48MP
+case verifies the explicit larger-photo budget, the unchanged conservative
+default, memory rejection, full-original decoding and the bounded 4K copy.
+
 The decoder library and its LGPL notices are separate from these fixtures.

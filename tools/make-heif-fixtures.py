@@ -49,4 +49,6 @@ expected['primary-second.heic'] = expected['exif-1.heic']
 if args.large:
     large = chart.resize((4032, 3024), resample=Image.Resampling.NEAREST)
     pillow_heif.from_bytes('RGB', large.size, large.tobytes()).save(out / 'synthetic-12mp.heic', quality=80)
+    large = chart.resize((8064, 6048), resample=Image.Resampling.NEAREST)
+    pillow_heif.from_bytes('RGB', large.size, large.tobytes()).save(out / 'synthetic-48mp.heic', quality=80)
 print(json.dumps({'fixtures': len(expected), 'encoder': pillow_heif.libheif_info()['libheif']}))

@@ -66,6 +66,7 @@ async page => {
       const offset = Number(url.searchParams.get('offset') || 0), total = scenario.total;
       const items = Array.from({ length: Math.min(48, Math.max(0, total - offset)) }, (_, i) => photo(offset + i + 1));
       if (scenario.sensitive && items[0]) items[0] = { ...items[0], sensitive: true, revealed: false, original: '', motion: '' };
+      if (scenario.gifSecond && items[1]) items[1] = { ...items[1], format: 'gif' };
       if (scenario.videoSecond && offset === 0 && items[1]) items[1] = { ...items[1], kind: 'video', stream: '/photo-video/clip-2', original: '', motion: '' };
       data = { items, total, offset, limit: 48, last: offset + items.length >= total };
     }
@@ -75,6 +76,8 @@ async page => {
     scenario = { total: 2, startCount: 0, qualityCount: 0, account: 'a', ...options }; calls.length = 0; requests.length = 0; uhdUploads.length = 0; infoPending = []; startPending = []; commitPending = []; candidates = new Map(); active = new Map();
     await page.goto(base + '/blank.html');
     await page.evaluate(({ base, options }) => { localStorage.clear(); localStorage.setItem('cinema.server', base); localStorage.setItem('cinema.token', 'fake-token'); localStorage.setItem('cinema.photoInterval', String(options.interval || 5)); localStorage.setItem('cinema.photoMode', options.mode || 'sequential'); localStorage.setItem('cinema.photoMusicOn', options.music ? '1' : '0'); localStorage.setItem('test.photoCandidateFail', String(Boolean(options.candidateFail))); localStorage.setItem('test.photoUhdVideoFail', String(Boolean(options.uhdVideoFail))); localStorage.setItem('test.photoFallbackPlane', String(Boolean(options.fallbackPlane))); localStorage.setItem('test.photoDeferMedia', String(Boolean(options.deferMedia))); }, { base, options });
+    await page.evaluate(options => localStorage.setItem('cinema.photoUhdBackground', options.autoUhd ? '1' : '0'), options);
+    if (options.savedUhd) await page.evaluate(() => localStorage.setItem('cinema.photoUhd', '1'));
     await page.goto(base);
     await page.evaluate(options => {
       window.__photoMusicCreations = 0;
@@ -188,6 +191,54 @@ async page => {
     check(uhdUploads[0].type === 'video/mp4' && uhdUploads[0].bytes === 12, 'Video was not uploaded raw'); check((await uhdVideo().evaluate(video => video.src)).includes('/photo-uhd/'), 'Video used a Blob URL');
     const text = await page.locator('#photo-uhd-status').textContent(); check(text.includes('4K 视频显示') && text.includes('有损') && text.includes('不会增加细节'), 'Output claims were inflated'); check(await page.locator('#photo-rotate').isDisabled(), 'CSS rotation could composite the UHD plane');
     await page.locator('#photo-uhd').click(); await page.waitForFunction(() => !document.querySelector('video[data-cloudframe-photo-lease]')); check(calls.some(path => path.includes('/api/photos/uhd/close')), 'HTTP RAM resource was not released'); check(await page.locator('#photo-full').evaluate(image => image.style.visibility !== 'hidden'), 'Preview not restored');
+  });
+  await run('旧版4K偏好不会在打开照片时自动触发转换', { uhd: true, savedUhd: true }, async () => {
+    await page.locator('[data-photo="0"]').click(); await page.waitForTimeout(80);
+    check(await page.locator('#photo-full').evaluate(image => image.naturalWidth > 0 && image.style.visibility !== 'hidden'), 'Photo did not appear immediately');
+    check(await page.evaluate(() => __uhdSources.length === 0 && localStorage.getItem('cinema.photoUhd') === '0'), 'Old failed preference restarted conversion');
+  });
+  await run('后台4K准备和完成都不显示进度遮罩不抢焦点', { uhd: true, autoUhd: true, deferEncode: true }, async () => {
+    await page.locator('[data-photo="0"]').click(); await page.waitForFunction(() => __uhdEncodePending.length === 1);
+    const before=await page.evaluate(()=>({focus:document.activeElement.id,visible:document.querySelector('#photo-full').style.visibility!=='hidden',status:!!document.querySelector('#photo-uhd-status'),disabled:document.querySelector('#photo-rotate').disabled,toast:document.querySelector('#toast').classList.contains('visible')}));
+    check(before.focus==='photo-close'&&before.visible&&!before.status&&!before.disabled&&!before.toast,'Background preparation interrupted the photo');
+    await page.evaluate(()=>__uhdEncodePending[0]());await page.waitForFunction(()=>document.querySelector('#photo-full')?.style.visibility==='hidden');
+    check(await page.evaluate(()=>document.activeElement.id==='photo-close'&&!document.querySelector('#photo-uhd-status')&&!document.querySelector('#toast').classList.contains('visible')),'Background completion moved focus or displayed a banner');
+  });
+  await run('快速切图只准备停留的照片并取消已开始的旧后台任务', { uhd: true, autoUhd: true, deferEncode: true }, async () => {
+    await page.locator('[data-photo="0"]').click();await page.locator('#photo-next').click();await page.waitForFunction(()=>__uhdEncodePending.length===1);
+    check(await page.evaluate(()=>__uhdSources.length===1&&__uhdSources[0].source.includes('original-2')),'Fast navigation decoded an obsolete image');
+    await page.locator('#photo-previous').click();await page.waitForFunction(()=>__uhdEncodePending.length===2);check(await page.evaluate(()=>__uhdSources[0].aborted),'Old background decoder was not cancelled');
+    await page.evaluate(()=>__uhdEncodePending[0]());await page.waitForTimeout(30);check(uhdUploads.length===0,'Late background result was uploaded');await page.evaluate(()=>__uhdEncodePending[1]());await page.waitForFunction(()=>document.querySelector('#photo-full')?.style.visibility==='hidden');
+  });
+  await run('后台失败静默保留照片且同一不支持格式不连续重试', { uhd: true, autoUhd: true, uhdDecodeFail: true }, async () => {
+    await page.locator('[data-photo="0"]').click();await page.waitForFunction(()=>__uhdSources.length===1&&__uhdSources[0].aborted);
+    check(await page.evaluate(()=>!document.querySelector('#photo-uhd-status')&&document.querySelector('#photo-full').style.visibility!=='hidden'&&!document.querySelector('#toast').classList.contains('visible')),'Automatic failure leaked a banner or lost the image');
+    await page.locator('#photo-next').click();await page.waitForTimeout(450);check(await page.evaluate(()=>__uhdSources.length===1),'Unsupported format retried on every photo');
+  });
+  await run('后台编码不会延长幻灯片间隔且切图立即取消旧任务', { uhd: true, autoUhd: true, deferEncode: true, interval: 2 }, async () => {
+    await page.locator('#photo-start').click();await page.waitForFunction(()=>__uhdEncodePending.length===1);
+    await page.waitForFunction(()=>document.querySelector('.photo-counter')?.textContent==='2 / 2');
+    check(await page.evaluate(()=>__uhdSources[0].aborted),'Slideshow waited for the pending encoder');
+  });
+  await run('旋转和放大优先取消后台4K且不会重置用户操作', { uhd: true, autoUhd: true, deferEncode: true }, async () => {
+    await page.locator('[data-photo="0"]').click();await page.waitForFunction(()=>__uhdEncodePending.length===1);await page.locator('#photo-rotate').click();
+    await page.evaluate(()=>__uhdEncodePending[0]());await page.waitForTimeout(400);check(await page.evaluate(()=>__uhdSources.length===1&&__uhdSources[0].aborted&&document.querySelector('#photo-full').style.transform.includes('90deg')&&document.querySelector('#photo-full').style.visibility!=='hidden'),'Background output overwrote the user rotation');
+  });
+  await run('4K失败后下一张照片不再自动重试且可手动重试', { uhd: true, uhdDecodeFail: true }, async () => {
+    await page.locator('[data-photo="0"]').click(); await page.locator('#photo-uhd').click(); await page.waitForFunction(() => document.querySelector('#photo-uhd-status')?.textContent.includes('原图格式暂不能'));
+    await page.locator('#photo-next').click(); await page.waitForTimeout(80); check(await page.evaluate(() => __uhdSources.length === 1), 'Failure retried on the next photo');
+    await page.locator('#photo-uhd').click(); await page.waitForFunction(() => __uhdSources.length === 2);
+  });
+  await run('成功4K后切到GIF保留动画图片而不自动生成静态首帧', { uhd: true, gifSecond: true }, async () => {
+    await page.locator('[data-photo="0"]').click(); await page.locator('#photo-uhd').click(); await page.waitForFunction(() => document.querySelector('#photo-full')?.style.visibility === 'hidden');
+    await page.locator('#photo-next').click(); await page.waitForTimeout(80); check(await page.evaluate(() => __uhdSources.length === 1 && !document.querySelector('video[data-cloudframe-photo-lease]')), 'GIF was automatically frozen into a still video');
+  });
+  await run('原画错误后可从错误面板切画质且成功加载移除旧错误遮罩', { videoSecond: true }, async () => {
+    await page.locator('[data-photo="1"]').click(); await page.locator('#photo-clip').evaluate(video => video.dispatchEvent(new Event('error')));
+    await page.locator('#photo-error-quality').click(); await page.waitForSelector('[data-photo-quality="1"]'); await page.locator('[data-photo-quality="1"]').click();
+    await page.waitForFunction(() => document.querySelector('#photo-clip')?.src.includes('/photo-hls/'));
+    await page.waitForFunction(() => document.querySelector('#photo-view-error')?.textContent === '');
+    check((await page.locator('#photo-video-quality').textContent()).includes('1080P'), 'Recovered quality not shown');
   });
   await run('4K静音视频保留同一WebAudio音乐并不创建HTMLAudio', { uhd: true, music: true }, async () => {
     await page.locator('#photo-start').click(); await page.waitForFunction(() => window.__soundtrack && !window.__soundtrack.state().paused); await page.locator('#photo-uhd').click(); await page.waitForSelector('video[data-cloudframe-photo-lease]'); await page.waitForFunction(() => document.querySelector('#photo-full')?.style.visibility === 'hidden');
