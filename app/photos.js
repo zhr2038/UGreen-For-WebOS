@@ -448,16 +448,17 @@
             if (!current() || G.videoSession !== session || G.videoPending !== pending) { api('/api/photos/video/discard', { id: session.id, candidate: result.candidate, request }, undefined, session.connection).catch(() => {}); return; }
             pending.candidate = result.candidate;
             const oldUrl = clip.src, oldError = clip.onerror, qualityButton = $('#photo-video-quality'); qualityButton.disabled = true;
-            let frameTimer;
+            let frameTimer, verificationTimer;
             const restorePosition = () => { if (generation !== G.imageGeneration) return; try { clip.currentTime = Math.min(position, Number.isFinite(clip.duration) ? Math.max(0, clip.duration - .1) : position); clip.playbackRate = G.videoRate; } catch { toast('画质已切换，当前电视未能恢复播放位置'); } };
             const rollback = () => {
               if (generation !== G.imageGeneration) return;
               clip.pause(); clip.removeAttribute('src'); clip.load(); clip.addEventListener('loadedmetadata', restorePosition, { once: true }); clip.src = oldUrl; clip.load();
               if (resume || resumeClip) clip.play().catch(() => {});
             };
-            const failed = () => { if (G.videoPending !== pending || pending.committing) return; cancelVideoCandidate(); toast('这个画质未能开始播放，已保留之前的画质'); };
-            const accepted = async () => {
+            const failed = () => { if (G.videoPending !== pending) return; if (pending.committing) { pending.decodeFailed = true; return; } cancelVideoCandidate(); toast('这个画质未能开始播放，已保留之前的画质'); };
+            const commitCandidate = async () => {
               if (G.videoPending !== pending || generation !== G.imageGeneration) return;
+              if (clip.error || clip.readyState < 2 || !clip.videoWidth || !clip.videoHeight) { failed(); return; }
               clearTimeout(frameTimer); pending.committing = true;
               try {
                 let result;
@@ -470,11 +471,14 @@
                   else { pending.cleanup(); G.videoPending = null; session.selected = 'unconfirmed'; session.unconfirmed = true; qualityButton.textContent = '画质：待确认'; toast('画质提交结果尚未确认，可重新打开画质菜单核对'); return; }
                 }
                 if (G.videoPending !== pending || generation !== G.imageGeneration) return;
+                const decodeFailed = pending.decodeFailed || Boolean(clip.error);
                 session.selected = result.selected || quality.id; qualityButton.textContent = '画质：' + (result.quality?.label || quality.label) + (clip.videoWidth && clip.videoHeight ? ` · ${clip.videoWidth} × ${clip.videoHeight}` : ''); pending.cleanup(); G.videoPending = null; if (result.warning) toast(result.warning);
+                if (decodeFailed) { oldError?.(); toast('所选画质无法解码，请选择原画或其他画质'); }
               } catch { pending.committing = false; failed(); }
               finally { pending.committing = false; }
             };
-            pending.cleanup = () => { clearTimeout(frameTimer); clip.removeEventListener('loadeddata', accepted); clip.removeEventListener('error', failed); clip.removeEventListener('loadedmetadata', restorePosition); clip.onerror = oldError; qualityButton.disabled = false; if (!G.videoPending || G.videoPending === pending) session.busy = false; };
+            const accepted = () => { clearTimeout(verificationTimer); verificationTimer = setTimeout(commitCandidate, 300); };
+            pending.cleanup = () => { clearTimeout(frameTimer); clearTimeout(verificationTimer); clip.removeEventListener('loadeddata', accepted); clip.removeEventListener('error', failed); clip.removeEventListener('loadedmetadata', restorePosition); clip.onerror = oldError; qualityButton.disabled = false; if (!G.videoPending || G.videoPending === pending) session.busy = false; };
             pending.restore = rollback;
             clip.onerror = null; clip.addEventListener('error', failed, { once: true }); clip.addEventListener('loadeddata', accepted, { once: true }); clip.addEventListener('loadedmetadata', restorePosition, { once: true });
             clip.pause(); clip.removeAttribute('src'); clip.load();

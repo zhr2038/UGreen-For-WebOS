@@ -1,0 +1,348 @@
+{
+  "date": "2026-11-02",
+  "controlledHttp": {
+    "before": {
+      "scenario": "synthetic HTTP cancellation; not a TV FPS measurement",
+      "results": [
+        {
+          "cache": "NativeThumbnails",
+          "media": "posters",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 670,
+          "started": 3,
+          "completed": 3,
+          "aborted": 0,
+          "active": 0,
+          "peak": 2
+        },
+        {
+          "cache": "NativeThumbnails",
+          "media": "photos",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 1750,
+          "started": 9,
+          "completed": 9,
+          "aborted": 0,
+          "active": 0,
+          "peak": 2
+        },
+        {
+          "cache": "Thumbnails",
+          "media": "posters",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 674,
+          "started": 3,
+          "completed": 3,
+          "aborted": 0,
+          "active": 0,
+          "peak": 2
+        },
+        {
+          "cache": "Thumbnails",
+          "media": "photos",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 1762,
+          "started": 9,
+          "completed": 9,
+          "aborted": 0,
+          "active": 0,
+          "peak": 2
+        }
+      ]
+    },
+    "after": {
+      "scenario": "synthetic HTTP cancellation; not a TV FPS measurement",
+      "results": [
+        {
+          "cache": "NativeThumbnails",
+          "media": "posters",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 374,
+          "started": 3,
+          "completed": 1,
+          "aborted": 2,
+          "active": 0,
+          "peak": 3
+        },
+        {
+          "cache": "NativeThumbnails",
+          "media": "photos",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 374,
+          "started": 3,
+          "completed": 1,
+          "aborted": 2,
+          "active": 0,
+          "peak": 3
+        },
+        {
+          "cache": "Thumbnails",
+          "media": "posters",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 367,
+          "started": 3,
+          "completed": 1,
+          "aborted": 2,
+          "active": 0,
+          "peak": 3
+        },
+        {
+          "cache": "Thumbnails",
+          "media": "photos",
+          "upstreamDelayMs": 350,
+          "obsoleteRequests": 8,
+          "newVisibleMs": 372,
+          "started": 3,
+          "completed": 1,
+          "aborted": 2,
+          "active": 0,
+          "peak": 3
+        }
+      ]
+    }
+  },
+  "c5": {
+    "input": "DevTools Input, not physical remote latency",
+    "gridItems": 119,
+    "samplesPerCase": 3,
+    "before": {
+      "grid-r": {
+        "medianMs": 14.700000001117587,
+        "rectReads": 123,
+        "visibilityReads": 132
+      },
+      "grid-d": {
+        "medianMs": 11.299999998882413,
+        "rectReads": 123,
+        "visibilityReads": 132
+      },
+      "nav": {
+        "medianMs": 4.700000001117587,
+        "rectReads": 0,
+        "visibilityReads": 132
+      },
+      "hero": {
+        "medianMs": 7.5,
+        "rectReads": 41,
+        "visibilityReads": 59
+      },
+      "shelf": {
+        "medianMs": 4.600000001490116,
+        "rectReads": 0,
+        "visibilityReads": 59
+      }
+    },
+    "after": {
+      "grid-r": {
+        "medianMs": 6.199999999254942,
+        "rectReads": 0,
+        "visibilityReads": 2
+      },
+      "grid-d": {
+        "medianMs": 8.700000001117587,
+        "rectReads": 0,
+        "visibilityReads": 2
+      },
+      "nav": {
+        "medianMs": 2.300000000745058,
+        "rectReads": 0,
+        "visibilityReads": 10
+      },
+      "hero": {
+        "medianMs": 4.599999999627471,
+        "rectReads": 22,
+        "visibilityReads": 25
+      },
+      "shelf": {
+        "medianMs": 4.200000001117587,
+        "rectReads": 0,
+        "visibilityReads": 22
+      }
+    },
+    "beforeSamples": {
+      "grid-r": [
+        {
+          "ms": 16.600000001490116,
+          "rectReads": 123,
+          "visibilityReads": 132
+        },
+        {
+          "ms": 8.900000000372529,
+          "rectReads": 123,
+          "visibilityReads": 132
+        },
+        {
+          "ms": 14.700000001117587,
+          "rectReads": 123,
+          "visibilityReads": 132
+        }
+      ],
+      "grid-d": [
+        {
+          "ms": 10.099999999627471,
+          "rectReads": 123,
+          "visibilityReads": 132
+        },
+        {
+          "ms": 11.299999998882413,
+          "rectReads": 123,
+          "visibilityReads": 132
+        },
+        {
+          "ms": 11.900000000372529,
+          "rectReads": 123,
+          "visibilityReads": 132
+        }
+      ],
+      "nav": [
+        {
+          "ms": 7.800000000745058,
+          "rectReads": 0,
+          "visibilityReads": 132
+        },
+        {
+          "ms": 4.700000001117587,
+          "rectReads": 0,
+          "visibilityReads": 132
+        },
+        {
+          "ms": 4.700000001117587,
+          "rectReads": 0,
+          "visibilityReads": 132
+        }
+      ],
+      "hero": [
+        {
+          "ms": 12.200000001117587,
+          "rectReads": 41,
+          "visibilityReads": 59
+        },
+        {
+          "ms": 6.399999998509884,
+          "rectReads": 41,
+          "visibilityReads": 59
+        },
+        {
+          "ms": 7.5,
+          "rectReads": 41,
+          "visibilityReads": 59
+        }
+      ],
+      "shelf": [
+        {
+          "ms": 4.600000001490116,
+          "rectReads": 0,
+          "visibilityReads": 59
+        },
+        {
+          "ms": 4.600000001490116,
+          "rectReads": 0,
+          "visibilityReads": 59
+        },
+        {
+          "ms": 3.400000000372529,
+          "rectReads": 0,
+          "visibilityReads": 59
+        }
+      ]
+    },
+    "afterSamples": {
+      "grid-r": [
+        {
+          "ms": 17.699999999254942,
+          "rectReads": 0,
+          "visibilityReads": 2
+        },
+        {
+          "ms": 6.199999999254942,
+          "rectReads": 0,
+          "visibilityReads": 2
+        },
+        {
+          "ms": 5,
+          "rectReads": 0,
+          "visibilityReads": 2
+        }
+      ],
+      "grid-d": [
+        {
+          "ms": 8.700000001117587,
+          "rectReads": 0,
+          "visibilityReads": 2
+        },
+        {
+          "ms": 14.800000000745058,
+          "rectReads": 0,
+          "visibilityReads": 2
+        },
+        {
+          "ms": 4.800000000745058,
+          "rectReads": 0,
+          "visibilityReads": 2
+        }
+      ],
+      "nav": [
+        {
+          "ms": 3.400000000372529,
+          "rectReads": 0,
+          "visibilityReads": 10
+        },
+        {
+          "ms": 2.100000001490116,
+          "rectReads": 0,
+          "visibilityReads": 10
+        },
+        {
+          "ms": 2.300000000745058,
+          "rectReads": 0,
+          "visibilityReads": 10
+        }
+      ],
+      "hero": [
+        {
+          "ms": 7.200000001117587,
+          "rectReads": 22,
+          "visibilityReads": 25
+        },
+        {
+          "ms": 4.599999999627471,
+          "rectReads": 22,
+          "visibilityReads": 25
+        },
+        {
+          "ms": 4.5,
+          "rectReads": 22,
+          "visibilityReads": 25
+        }
+      ],
+      "shelf": [
+        {
+          "ms": 7.799999998882413,
+          "rectReads": 0,
+          "visibilityReads": 22
+        },
+        {
+          "ms": 4.200000001117587,
+          "rectReads": 0,
+          "visibilityReads": 22
+        },
+        {
+          "ms": 3,
+          "rectReads": 0,
+          "visibilityReads": 22
+        }
+      ]
+    }
+  },
+  "limits": [
+    "Short event-handler samples include instrumentation overhead; not a fixed FPS guarantee.",
+    "Controlled HTTP uses synthetic images and 350ms delay; not a WAN throughput result."
+  ]
+}

@@ -36,6 +36,7 @@ async page => {
       this.dispatchEvent(new Event('play')); const deliver = () => {
         if (this.tagName === 'VIDEO' && (this.__source.includes('/photo-hls/') && localStorage.getItem('test.photoCandidateFail') === 'true' || this.__source.includes('/photo-uhd/') && localStorage.getItem('test.photoUhdVideoFail') === 'true')) { this.dispatchEvent(new Event('error')); return; }
         this.dispatchEvent(new Event('loadedmetadata')); this.dispatchEvent(new Event('loadeddata'));
+        if (this.__source.includes('/photo-hls/') && localStorage.getItem('test.photoLateCandidateFail') === 'true') { const source=this.__source; setTimeout(()=>{if(this.__source===source)this.dispatchEvent(new Event('error'))},60); }
       }; if (this.__source.includes('/photo-hls/') && localStorage.getItem('test.photoDeferMedia') === 'true') __pendingPhotoMedia.push(deliver); else queueMicrotask(deliver); return Promise.resolve();
     };
   });
@@ -83,6 +84,7 @@ async page => {
     if (options.savedUhd) await page.evaluate(() => localStorage.setItem('cinema.photoUhd', '1'));
     await page.goto(base);
     await page.evaluate(options => {
+      localStorage.setItem('test.photoLateCandidateFail',String(Boolean(options.lateCandidateFail)));
       window.__photoMusicCreations = 0;
       if (options.frameCallbackUnsupported) { HTMLVideoElement.prototype.requestVideoFrameCallback = () => { throw new DOMException('Synthetic unsupported TV callback', 'NotSupportedError'); }; HTMLVideoElement.prototype.cancelVideoFrameCallback = () => { throw new DOMException('Synthetic unsupported TV callback', 'NotSupportedError'); }; }
       if (options.legacyMusic) { delete window.createPhotoMusic; return; }
@@ -241,6 +243,7 @@ async page => {
     await page.locator('#photo-error-quality').click(); await page.waitForSelector('[data-photo-quality="1"]'); await page.locator('[data-photo-quality="1"]').click();
     await page.waitForFunction(() => document.querySelector('#photo-clip')?.src.includes('/photo-hls/'));
     await page.waitForFunction(() => document.querySelector('#photo-view-error')?.textContent === '');
+    await page.waitForFunction(()=>document.querySelector('#photo-video-quality')?.textContent.includes('1080P')&&!document.querySelector('#photo-video-quality').disabled);
     check((await page.locator('#photo-video-quality').textContent()).includes('1080P'), 'Recovered quality not shown');
   });
   await run('4K静音视频保留同一WebAudio音乐并不创建HTMLAudio', { uhd: true, music: true }, async () => {
@@ -433,6 +436,11 @@ async page => {
     check(await page.locator('#photo-original').textContent()==='预览图','GIF original state mislabeled');
     await page.locator('#photo-original').click();await page.waitForFunction(()=>document.querySelector('#photo-full')?.src.includes('/photo-image/'));
     await page.locator('#photo-original').click();await page.waitForFunction(()=>document.querySelector('#photo-full')?.src.includes('/photo-original/'));
+  });
+  await run('解码回归-转码首帧声明后迟到错误不能提交失败档位', {videoSecond:true,lateCandidateFail:true}, async()=>{
+    await page.locator('[data-photo="1"]').click();await page.locator('#photo-clip').evaluate(v=>v.currentTime=75);await page.locator('#photo-video-quality').click();await page.waitForSelector('[data-photo-quality="1"]');await page.locator('[data-photo-quality="1"]').click();
+    await until(()=>requests.some(r=>r.path==='/api/photos/video/discard'));await page.waitForFunction(()=>document.querySelector('#photo-clip')?.src.includes('/photo-video/'));
+    check(!requests.some(r=>r.path==='/api/photos/video/commit'),'Late decoder failure was already committed');check(await page.locator('#photo-clip').evaluate(v=>v.currentTime)===75,'Decoder fallback lost the original position');check((await page.locator('#photo-video-quality').textContent()).includes('原画'),'Failed profile remained selected');
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases }; check(cases.length, 'No photo tests matched'); if (report.failed) throw new Error(JSON.stringify(report)); return report;
 }

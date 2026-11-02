@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -11,7 +12,6 @@ const A = 'a'.repeat(64), B = 'b'.repeat(64), owner = value => createHash('sha25
 const avcC = Buffer.from('0142c033ffe100136742c0338c6803c0043e9a83030303c2211a8001000468ce3c80', 'hex');
 const fhd = Buffer.from('0142c033ffe1001a6742c033d900780227e5c044000003000400000300083c60c92001000568cb83cb20', 'hex');
 const mp4 = config => Buffer.from(PhotoUhdPipeline.muxAvcStill({ data: Uint8Array.from([0, 0, 0, 2, 101, 136]), avcC: config || avcC, width: 3840, height: 2160, durationMs: 15000 }));
-const blocked = new Set([1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080]);
 const wait = () => new Promise(resolve => setTimeout(resolve, 5));
 async function until(condition) { const end = Date.now() + 2000; while (!condition()) { if (Date.now() > end) throw new Error('test condition timeout'); await wait(); } }
 class Clock {
@@ -27,7 +27,7 @@ async function fixture(t, options = {}) {
     const url = new URL(req.url, 'http://localhost'), client = req.headers.authorization?.replace(/^Bearer /i, '') || url.searchParams.get('client');
     if (!await handler(req, res, { url, owner: [A, B].includes(client) ? owner(client) : undefined, urlContext: { client }, ...(options.signal ? { signal: options.signal } : {}) })) { res.writeHead(404); res.end(); }
   });
-  do { server.listen(0, '127.0.0.1'); await once(server, 'listening'); if (!blocked.has(server.address().port)) break; await new Promise(resolve => server.close(resolve)); } while (true);
+  await listenBrowser(server);
   const base = 'http://127.0.0.1:' + server.address().port;
   t.after(async () => { await handler.dispose(); await photos.clear(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const upload = async ({ bytes = mp4(), token = A, source = asset, contentType = 'video/mp4' } = {}) => { const res = await fetch(base + '/api/photos/uhd?asset=' + source, { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': contentType }, body: bytes }); return { status: res.status, body: await res.json() }; };

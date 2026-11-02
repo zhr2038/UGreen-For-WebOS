@@ -495,59 +495,72 @@
   function moveFocus(direction) {
     const scope = S.selectPopup?.element || (S.route === 'player' ? (S.dialog === 'error' ? $('#player-message') : S.dialog ? $('.player-dialog') : $('.player-ui')) : root);
     if (!scope) return;
-    const all = Array.from(scope.querySelectorAll('button,input,select,[tabindex="0"]')).filter(el => !el.disabled && el.offsetParent !== null);
-    let current = document.activeElement;
-    if (!all.includes(current)) {
-      current = all.includes(S.lastContentFocus) ? S.lastContentFocus : scope.querySelector('[data-primary]') || all.find(el => !el.closest('.nav')) || all[0];
-      focus(current); return;
+    const selector = 'button,input,select,[tabindex="0"]';
+    const usable = el => Boolean(el?.isConnected && !el.disabled && el.offsetParent !== null);
+    let all;
+    const candidates = () => all ||= Array.from(scope.querySelectorAll(selector)).filter(usable);
+    const current = document.activeElement;
+    if (!scope.contains(current) || !current.matches?.(selector) || !usable(current)) {
+      const items = candidates();
+      focus(items.includes(S.lastContentFocus) ? S.lastContentFocus : scope.querySelector('[data-primary]') || items.find(el => !el.closest('.nav')) || items[0]); return;
     }
     const inNav = current.closest('.nav');
     if (inNav) {
-      const buttons = Array.from(inNav.querySelectorAll('button'));
+      const buttons = Array.from(inNav.querySelectorAll('button')).filter(usable);
       if (direction === 'left') return;
       if (direction === 'up' || direction === 'down') { focus(buttons[Math.max(0, Math.min(buttons.length - 1, buttons.indexOf(current) + (direction === 'up' ? -1 : 1)))]); return; }
-      if (all.includes(S.lastContentFocus) && !S.lastContentFocus.closest('.nav')) { focus(S.lastContentFocus); return; }
+      if (S.lastContentFocus?.matches(selector) && scope.contains(S.lastContentFocus) && usable(S.lastContentFocus) && !S.lastContentFocus.closest('.nav')) { focus(S.lastContentFocus); return; }
     }
     const row = current.closest('.shelf-row');
-    // Home has ordered content shelves. Geometry alone can prefer a hero
-    // pagination dot or a distant row once the hero has scrolled off screen.
     const homeHero = S.route === 'home' && scope === root && root.querySelector('.hero [data-primary]');
     if (homeHero === current && direction === 'left') { focus(root.querySelector('.nav button.active')); return; }
     if (homeHero && !inNav && (direction === 'up' || direction === 'down')) {
-      const rows = Array.from(root.querySelectorAll('.shelf-row')).filter(value => all.some(el => value.contains(el)));
+      const rows = Array.from(root.querySelectorAll('.shelf-row')).filter(value => Array.from(value.querySelectorAll(selector)).some(usable));
       const index = rows.indexOf(row), inHero = current.closest('.hero');
       if (index >= 0 || inHero) {
         if (direction === 'up' && (index === 0 || inHero)) {
-          focus(homeHero); const screen = homeHero.closest('.screen'); if (screen) screen.scrollTop = 0;
-          return;
+          focus(homeHero); const screen = homeHero.closest('.screen'); if (screen) screen.scrollTop = 0; return;
         }
         const target = rows[inHero ? 0 : index + (direction === 'up' ? -1 : 1)];
         if (target) {
           const a = current.getBoundingClientRect(), center = a.left + a.width / 2;
-          const items = all.filter(el => target.contains(el));
-          items.sort((a, b) => { const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect(); return Math.abs(ar.left + ar.width / 2 - center) - Math.abs(br.left + br.width / 2 - center); });
-          focus(items[0]);
+          let nearest, distance = Infinity;
+          for (const item of Array.from(target.querySelectorAll(selector)).filter(usable)) {
+            const rect = item.getBoundingClientRect(), delta = Math.abs(rect.left + rect.width / 2 - center);
+            if (delta < distance) { distance = delta; nearest = item; }
+          }
+          focus(nearest);
         }
         return;
       }
     }
     if (row && (direction === 'left' || direction === 'right')) {
-      const items = Array.from(row.querySelectorAll('button')).filter(el => !el.disabled);
+      const items = Array.from(row.querySelectorAll('button')).filter(usable);
       const next = items[items.indexOf(current) + (direction === 'right' ? 1 : -1)];
-      if (next) focus(next);
-      else if (direction === 'left') focus(root.querySelector('.nav button.active'));
+      if (next) focus(next); else if (direction === 'left') focus(root.querySelector('.nav button.active'));
       return;
     }
-    const a = current.getBoundingClientRect(); const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+    // Regular movie grids have aligned columns. Interior moves need only the
+    // adjacent button; edges and unusual layouts retain the geometry fallback.
+    const grid = scope === root && current.matches('.movie') && current.closest('.grid');
+    if (grid) {
+      const columns = getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length;
+      const items = Array.from(grid.querySelectorAll(':scope > .movie')), index = items.indexOf(current);
+      if (columns > 1 && index >= 0) {
+        const horizontal = direction === 'left' || direction === 'right';
+        const delta = direction === 'left' ? -1 : direction === 'right' ? 1 : direction === 'up' ? -columns : columns;
+        const target = index + delta;
+        if (target >= 0 && target < items.length && (!horizontal || Math.floor(target / columns) === Math.floor(index / columns)) && usable(items[target])) { focus(items[target]); return; }
+      }
+    }
+    const a = current.getBoundingClientRect(), ax = a.left + a.width / 2, ay = a.top + a.height / 2;
     let winner, best = Infinity;
-    for (const el of all) {
-      if (el === current) continue;
-      if (!inNav && el.closest('.nav')) continue;
-      const b = el.getBoundingClientRect(); const dx = b.left + b.width / 2 - ax, dy = b.top + b.height / 2 - ay;
+    for (const el of candidates()) {
+      if (el === current || !inNav && el.closest('.nav')) continue;
+      const b = el.getBoundingClientRect(), dx = b.left + b.width / 2 - ax, dy = b.top + b.height / 2 - ay;
       const forward = direction === 'left' ? -dx : direction === 'right' ? dx : direction === 'up' ? -dy : dy;
       if (forward <= 2) continue;
-      const side = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx);
-      const score = forward + side * 3.2;
+      const side = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx), score = forward + side * 3.2;
       if (score < best) { best = score; winner = el; }
     }
     if (!winner && direction === 'left' && !inNav && scope === root) winner = root.querySelector('.nav button.active');

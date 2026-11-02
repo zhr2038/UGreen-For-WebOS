@@ -3,15 +3,17 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../app/movie-media.js', import.meta.url), 'utf8');
+async function until(check) { const deadline=Date.now()+1000;while(!check()){if(Date.now()>deadline)throw Error('Commit was not reached');await new Promise(r=>setTimeout(r,1));} }
 function harness(options = {}) {
   class Video extends EventTarget {
     constructor() { super(); this.src = this.currentSrc = '/old'; this.currentTime = 321; this.duration = 1000; this.paused = true; this.playbackRate = 1.5; this.preload = 'metadata'; this.readyState = 4; this.seeking = false; this.loads = []; }
     load() {
-      this.readyState = 0; this.currentTime = 0; this.currentSrc = this.src; this.loads.push(this.src);
+      this.readyState = 0; this.error = null; this.currentTime = 0; this.currentSrc = this.src; this.loads.push(this.src);
       if (options.hold && this.src === '/new' || options.holdOld && this.src === '/old') return;
       queueMicrotask(() => {
         if (options.fail && this.src === '/new') return this.dispatchEvent(new Event('error'));
         this.readyState = 1; this.dispatchEvent(new Event('loadedmetadata')); this.readyState = 4; this.dispatchEvent(new Event('loadeddata'));
+        if(options.lateFail&&this.src==='/new')setTimeout(()=>{if(this.src==='/new'){this.error={code:3};this.dispatchEvent(new Event('error'));}},2);
       });
     }
     play() { this.paused = false; return Promise.resolve(); }
@@ -59,7 +61,7 @@ test('unknown commit outcome never rolls back to a possibly closed old task', as
 });
 test('closing settings during commit does not undo a confirmed source promotion', async () => {
   let resolve; const gate = new Promise(r => resolve = r); const h = harness({ commit: () => gate });
-  const job = h.media.switchSource(h.candidate, h.context); await new Promise(r => setTimeout(r, 0)); h.invalidate(); h.abort.abort(); resolve(h.active); await job;
+  const job = h.media.switchSource(h.candidate, h.context); await until(()=>h.calls.some(c=>c.body?.action==='commit')); h.invalidate(); h.abort.abort(); resolve(h.active); await job;
   assert.equal(h.p.sourceId, 'candidate'); assert.deepEqual(h.video.loads, ['/new']);
 });
 test('a source that never decodes times out and leaves no active operation', async () => {
@@ -80,6 +82,10 @@ test('a slow rollback cannot seek a newly opened film to the previous film posit
 });
 test('a decoded candidate waiting for commit exposes its current valid progress', async () => {
   let resolve; const gate = new Promise(r => resolve = r), h = harness({ commit: () => gate });
-  const job = h.media.switchSource(h.candidate, h.context); await new Promise(r => setTimeout(r, 0)); h.video.currentTime = 654;
+  const job = h.media.switchSource(h.candidate, h.context); await until(()=>h.calls.some(c=>c.body?.action==='commit')); h.video.currentTime = 654;
   assert.equal(h.media.snapshot().position, 654); resolve(h.active); await job;
+});
+test('a late decoder error after loadeddata cannot commit a broken movie source',async()=>{
+  const h=harness({lateFail:true});await assert.rejects(h.media.switchSource(h.candidate,h.context),/解码/);
+  assert.equal(h.video.src,'/old');assert.equal(h.video.currentTime,321);assert.equal(h.calls.some(c=>c.body?.action==='commit'),false);assert.equal(h.calls.some(c=>c.body?.action==='discard'),true);
 });

@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import { playwrightStatus } from '../tools/playwright-status.mjs';
 import http from 'node:http';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -16,7 +17,7 @@ const server=http.createServer(async(req,res)=>{
     if(url.pathname.endsWith('b'.repeat(40))){const timer=setTimeout(send,200);res.once('close',()=>clearTimeout(timer));}else send();return;
   }
   res.writeHead(404);res.end();
-});server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
+});await listenBrowser(server);const base='http://127.0.0.1:'+server.address().port;
 const code=`async page=>{
   const base=${JSON.stringify(base)},cases=[];const assert=(v,m)=>{if(!v)throw new Error(m);};const test=async(name,fn)=>{try{const details=await fn();cases.push({name,ok:true,...(details?{details}:{})});}catch(error){cases.push({name,ok:false,error:error.message});}};
   async function boot(extra={}){

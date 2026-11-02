@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -11,7 +12,6 @@ import { createPhotoHttpHandler } from '../lib/photo-http.mjs';
 const A = 'a'.repeat(64), B = 'b'.repeat(64), NAS_A = 'fake-nas-private-token-A-12345', NAS_B = 'fake-nas-private-token-B-12345', STATIC = 'fake-persistent-nas-token-12345';
 const owner = token => createHash('sha256').update(token).digest('hex');
 const ROOT = '/ugreen/v2/stream/transcode/';
-const fetchBlockedEphemeral = new Set([1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080]);
 const aborted = () => new DOMException('Fake operation cancelled', 'AbortError');
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
 async function until(condition) { const end = Date.now() + 3000; while (!condition()) { if (Date.now() > end) throw new Error('fake condition timed out'); await tick(); } }
@@ -58,7 +58,7 @@ async function fixture(t, options = {}) {
     const context = options.fixed ? {} : { url, owner: [A, B].includes(credential) ? owner(credential) : undefined, urlContext: { client: credential, ...(options.urlContext || {}) }, ...(options.signal ? { signal: options.signal } : {}) };
     if (!await handler(req, res, context)) { res.writeHead(404); res.end(); }
   });
-  do { server.listen(0, '127.0.0.1'); await once(server, 'listening'); if (!fetchBlockedEphemeral.has(server.address().port)) break; await new Promise(resolve => server.close(resolve)); } while (true);
+  await listenBrowser(server);
   const base = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => { await handler.dispose(); await photos.clear(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const request = async (path, { token = A, body, method = body ? 'POST' : 'GET', headers = {}, signal } = {}) => fetch(base + path, { method, headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers }, ...(body ? { body: JSON.stringify(body) } : {}), signal });

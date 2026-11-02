@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import http from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -23,7 +24,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404); res.end();
   } catch { res.writeHead(500); res.end(); }
 });
-server.listen(0, '127.0.0.1'); await once(server, 'listening'); const base = `http://127.0.0.1:${server.address().port}`;
+await listenBrowser(server); const base = `http://127.0.0.1:${server.address().port}`;
 const session = 'photo-uhd-' + process.pid, cli = join(project, 'node_modules/@playwright/cli/playwright-cli.js');
 const runtime = join(project, '.local/photo-uhd-runtime.js'); await writeFile(runtime, (await readFile(join(project, 'test/photo-uhd-browser.js'), 'utf8')).replace('__UI_BASE_URL__', base));
 let log = '';

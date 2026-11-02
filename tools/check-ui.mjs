@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import http from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
@@ -24,7 +25,7 @@ const server = http.createServer(async (req, res) => {
     res.end(bytes);
   } catch { res.writeHead(404); res.end(); }
 });
-server.listen(0, '127.0.0.1'); await once(server, 'listening');
+await listenBrowser(server);
 const base = `http://127.0.0.1:${server.address().port}`;
 const mockImage = await sharp({ create: { width: 320, height: 180, channels: 3, background: '#225577' } }).png().toBuffer();
 const code = (await readFile(join(project, 'test', scenario + '.js'), 'utf8')).replace('__UI_BASE_URL__', base).replace('__UI_FILTER__', JSON.stringify(process.env.CINEMA_UI_FILTER || '')).replace('__UI_IMAGE_BASE64__', JSON.stringify(mockImage.toString('base64')));

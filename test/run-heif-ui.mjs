@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import { playwrightStatus } from '../tools/playwright-status.mjs';
 import http from 'node:http';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -22,7 +23,7 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/asset-count'){res.end(String(assetReads));return;}
   if(files[url.pathname]){if(url.pathname!=='/heif-client.js'){assetReads++;if(url.searchParams.get('client')!=='synthetic-test-cap'){res.writeHead(401);res.end();return;}}res.setHeader('Content-Type',url.pathname.endsWith('.wasm')?'application/wasm':'text/javascript');res.end(await readFile(files[url.pathname]));return;}
   res.writeHead(404);res.end();
-});server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
+});await listenBrowser(server);const base='http://127.0.0.1:'+server.address().port;
 const fixture=(await readFile(join(root,'test/fixtures/heif/exif-6.heic'))).toString('base64'),chart=(await readFile(join(root,'test/fixtures/heif/exif-1.heic'))).toString('base64'),large=(await readFile(join(root,'test/fixtures/heif/synthetic-12mp.heic'))).toString('base64');
 const script=`async page=>{
   const base=${JSON.stringify(base)},fixture=${JSON.stringify(fixture)},chart=${JSON.stringify(chart)},offline=${JSON.stringify(pathToFileURL(join(runtime,'offline.html')).href)},assets=${JSON.stringify(pathToFileURL(join(runtime,'heif-assets.js')).href)};

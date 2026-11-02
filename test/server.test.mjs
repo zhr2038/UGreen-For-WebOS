@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -38,10 +39,10 @@ test('bridge isolates NAS credentials, forwards ranges and scopes playback to th
     if (url.pathname.endsWith('/recently_played/create')) { let raw = ''; for await (const b of req) raw += b; calls.push({ progress: JSON.parse(raw) }); }
     res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ code: 200, data }));
   });
-  upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
+  await listenBrowser(upstream);
   const state = await mkdtemp(join(tmpdir(), 'lg-cinema-test-'));
   await writeFile(join(state, 'nas.json'), JSON.stringify({ server: `http://127.0.0.1:${upstream.address().port}`, token: 'private-nas-token', clientId: 'test', name: 'Test NAS' }));
-  const portProbe = http.createServer(); portProbe.listen(0, '127.0.0.1'); await once(portProbe, 'listening'); const port = portProbe.address().port; await new Promise(r => portProbe.close(r));
+  const portProbe = http.createServer(); await listenBrowser(portProbe); const port = portProbe.address().port; await new Promise(r => portProbe.close(r));
   const child = spawn(process.execPath, ['server.mjs'], { cwd: resolve(import.meta.dirname, '..'), env: { ...process.env, STATE_DIR: state, HOST: '127.0.0.1', PORT: String(port) }, stdio: 'pipe' });
   let log = ''; child.stderr.on('data', d => log += d);
   t.after(async () => { child.kill(); await once(child, 'exit').catch(() => {}); await new Promise(r => upstream.close(r)); await rm(state, { recursive: true, force: true }); });

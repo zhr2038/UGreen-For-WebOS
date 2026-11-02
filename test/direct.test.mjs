@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -65,7 +66,7 @@ test('on-TV loopback mode exposes authenticated photo previews without enabling 
     if (req.url.startsWith('/ugreen/v5/photo/picture/stream')) { res.setHeader('Content-Type', 'image/png'); res.end(png); return; }
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: 200, data: { list: [{ picture_id: '1', file_name: 'sample.png', show_type: 0 }], total: 1 } }));
   });
-  upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
+  await listenBrowser(upstream);
   const { server } = await createBridge({ dir, config: { server: `http://127.0.0.1:${upstream.address().port}`, token: 'private-session', clientId: 'sample' }, thumbnails: new NativeThumbnails(), host: '127.0.0.1', port: 0, clientToken: 'on-device-capability' });
   t.after(async () => { await new Promise(r => server.close(r)); await new Promise(r => upstream.close(r)); await rm(dir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}`, headers = { Authorization: 'Bearer on-device-capability' };
@@ -79,7 +80,7 @@ test('on-TV loopback mode exposes authenticated photo previews without enabling 
 test('NAS transport uses ugk for persistent scan sessions and token for ordinary sessions, including Range requests', async t => {
   const requests = [];
   const server = http.createServer((req, res) => { const url = new URL(req.url, 'http://localhost'); requests.push({ token: url.searchParams.get('token'), ugk: url.searchParams.get('ugk'), range: req.headers.range }); res.end('{"code":200,"data":{}}'); });
-  server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => new Promise(r => server.close(r)));
+  await listenBrowser(server); t.after(() => new Promise(r => server.close(r)));
   const config = { server: `http://127.0.0.1:${server.address().port}`, token: 'short-token', staticToken: 'persistent-key', clientId: 'example' }; const nas = new UgOS(config);
   t.after(() => nas.httpsAgent.destroy());
   await nas.request('v1/video/homepage/media_list'); config.authMode = 'ugk'; await nas.request('v1/video/homepage/media_list', { headers: { Range: 'bytes=0-31' } });

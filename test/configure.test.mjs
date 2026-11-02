@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -20,7 +21,7 @@ for (const otp of [false, true]) test(otp ? 'NAS setup leaves no configuration w
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ code: 200, data: otp ? { enable_otp: true } : { token: 'fake-session', static_token: 'fake-static', nas_name: 'Example NAS', model: 'DXP example' } }));
   });
-  upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
+  await listenBrowser(upstream);
   const state = await mkdtemp(join(tmpdir(), 'lg-cinema-configure-'));
   t.after(async () => { await new Promise(r => upstream.close(r)); await rm(state, { recursive: true, force: true }); });
   const child = spawn(process.execPath, ['tools/configure-nas.mjs', '--server', `http://127.0.0.1:${upstream.address().port}`, '--state-dir', state], { cwd: resolve(import.meta.dirname, '..'), stdio: ['pipe', 'pipe', 'pipe'] });

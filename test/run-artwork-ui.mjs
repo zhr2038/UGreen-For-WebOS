@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import { playwrightStatus } from '../tools/playwright-status.mjs';
 import http from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -27,7 +28,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', path.includes('wide') || path.includes('small') ? 'image/png' : 'image/jpeg'); res.setHeader('Content-Length', image.length); res.setHeader('Cache-Control', 'no-store');
   setTimeout(() => { if (!res.destroyed) res.end(image); }, path.includes('slow') ? 450 : 25);
 });
-server.listen(0, '127.0.0.1'); await once(server, 'listening'); const base = `http://127.0.0.1:${server.address().port}`;
+await listenBrowser(server); const base = `http://127.0.0.1:${server.address().port}`;
 
 async function artworkSuite(page) {
   const base = '__ART_BASE__', results = [];

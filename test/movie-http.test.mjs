@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createMoviePlaybackService } from '../lib/movie-playback-service.mjs';
 import { createMovieHttpHandler, movieSourceUrl } from '../lib/movie-http.mjs';
+import { listenBrowser } from '../lib/browser-listen.mjs';
 
 const config = { server:'https://private-nas.invalid', alias:'nas-a', username:'viewer', token:'SECRET_NAS_TOKEN_NEVER_PUBLIC', clientId:'private-client' };
 const play = { file:{path:'/private/movie.mkv',duration:3600}, item:{id:1,categoryId:'one',libraryId:1,type:1,name:'Example'} };
@@ -63,7 +64,7 @@ async function fixture(t, options={}) {
     if(await handler(req,res,context))return;
     res.writeHead(404,{'content-type':'text/plain'});res.end('root fallback');
   });
-  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
+  await listenBrowser(server);const base='http://127.0.0.1:'+server.address().port;
   t.after(async()=>{tracker.createGate?.resolve();tracker.closeGate?.resolve();await movies.reset();server.closeAllConnections();await new Promise(r=>server.close(r));});
   const request=(path,opts={})=>fetch(base+path,{...opts,headers:{Authorization:'Bearer cap-a',...opts.headers}});
   const post=(path,body,opts={})=>request(path,{method:'POST',body:JSON.stringify(body),...opts,headers:{'Content-Type':'application/json',...opts.headers}});

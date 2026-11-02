@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import { playwrightStatus } from '../tools/playwright-status.mjs';
 import http from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -12,7 +13,7 @@ const server = http.createServer(async (req, res) => {
   if (!['app.css','player-options.css','player-options.js'].includes(file)) { res.writeHead(404); res.end(); return; }
   res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : 'text/javascript'); res.end(await readFile(join(project, 'app', file)));
 });
-server.listen(0, '127.0.0.1'); await once(server, 'listening');
+await listenBrowser(server);
 const script = (await readFile(join(project, 'test/player-options-ui.js'), 'utf8')).replace('__PLAYER_OPTIONS_BASE__', `http://127.0.0.1:${server.address().port}`);
 const runtime = join(project, '.local/player-options-ui-runtime.js'); await writeFile(runtime, script);
 let log = '';

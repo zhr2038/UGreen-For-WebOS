@@ -7,9 +7,9 @@
     function cancel() { generation++; operation?.controller.abort(); operation?.rollbackController?.abort(); }
     function load(url, { position, paused, rate }, signal, isCurrent = () => true) {
       return new Promise((resolve, reject) => {
-        let settled = false, expected = url;
+        let settled = false, expected = url, verificationTimer;
         const finish = error => {
-          if (settled) return; settled = true; clearTimeout(timer);
+          if (settled) return; settled = true; clearTimeout(timer); clearTimeout(verificationTimer);
           for (const [name, handler] of listeners) video.removeEventListener(name, handler);
           signal?.removeEventListener('abort', abort);
           error ? reject(error) : resolve();
@@ -21,7 +21,14 @@
             video.playbackRate = rate;
           } catch (error) { finish(error); }
         };
-        const ready = () => { if (!isCurrent() || video.src !== expected) return finish(cancelled()); if (video.readyState >= 2 && !video.seeking) finish(); };
+        const ready = () => {
+          if (!isCurrent() || video.src !== expected) return finish(cancelled());
+          if (video.error) return finish(new Error('电视无法解码这个画质'));
+          if (video.readyState < 2 || video.seeking || verificationTimer) return;
+          // Some native decoders announce loadeddata before rejecting the
+          // codec. Keep the old source until this brief observation completes.
+          verificationTimer = setTimeout(() => { verificationTimer = null; if (video.readyState >= 2 && !video.seeking) { if (video.error) finish(new Error('电视无法解码这个画质')); else if (!isCurrent() || video.src !== expected) finish(cancelled()); else finish(); } }, Math.min(300, timeoutMs / 3));
+        };
         const abort = () => finish(cancelled());
         const listeners = [['loadedmetadata', metadata], ['loadeddata', ready], ['canplay', ready], ['seeked', ready], ['error', () => finish(new Error('电视无法解码这个画质'))]];
         const timer = setTimeout(() => finish(new Error('画质切换超时')), timeoutMs);

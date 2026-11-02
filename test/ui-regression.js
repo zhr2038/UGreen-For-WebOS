@@ -4,6 +4,7 @@ async page => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const check = (value, message) => { if (!value) throw new Error(message); };
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const until = async check => { const deadline=Date.now()+3000;while(!check()){if(Date.now()>deadline)throw Error('Expected request phase was not reached');await delay(5);} };
   const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
   const movie = id => ({ id, libraryId: 1, type: 1, name: '示例影片 ' + id, year: 2026, score: 7, duration: 3600, position: 120, progress: .03, overview: '测试影片资料', clarity: 'HD', genres: [], poster: '/mock-image/poster', backdrop: '/mock-image/background', cover: '/mock-image/cover' });
   let control, errors;
@@ -468,7 +469,7 @@ async page => {
   });
   await run('画质提交中关闭设置仍对账并显示真实活动画质', async () => {
     await play(); await qualityMenu(); const gate = deferred(); control.gates.push(gate); control.commitGate = gate;
-    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await page.waitForFunction(() => document.querySelector('.player-options')?.dataset.busy === 'true'); await delay(80);
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await until(()=>control.calls.some(c=>c.path==='/api/play/quality'&&c.body?.action==='commit'));
     await page.keyboard.press('Escape'); gate.resolve(); await page.waitForFunction(() => document.querySelector('.player-buttons .info')?.textContent.includes('720P'));
     check(!control.calls.some(c => c.body?.action === 'discard'), 'Closing settings discarded an already committing source');
   });
@@ -492,7 +493,7 @@ async page => {
   });
   await run('新画质就绪且提交等待中退出保存当前有效进度', async () => {
     await play(); await qualityMenu(); const gate = deferred(); control.gates.push(gate); control.commitGate = gate;
-    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await delay(80);
+    await page.locator('[data-po-action="quality"][data-po-value="720p"]').click(); await until(()=>control.calls.some(c=>c.path==='/api/play/quality'&&c.body?.action==='commit'));
     await page.locator('#video').evaluate(v => v.currentTime = 800); await page.locator('#stop-player').click(); await page.waitForSelector('#play'); gate.resolve(); await delay(80);
     check(await page.locator('#play').textContent() === '继续播放 00:13:20', 'Stop saved the pre-switch position after the candidate was ready');
     check(control.calls.some(c => c.path === '/api/progress' && c.body.position === 800), 'Ready candidate final position was not reported');
@@ -542,6 +543,14 @@ async page => {
   await run('完整功能：跨媒体库同ID影片返回时焦点回到原来的库条目', async () => {
     control.overlapPages=true;await page.locator('.nav [data-route="movies"]').click();await page.waitForSelector('.grid [data-item]');await page.locator('#load-more').click();await page.waitForSelector('.grid [data-item="60"][data-library="2"]');await page.locator('.grid [data-item="60"][data-library="2"]').click();await page.waitForSelector('#play');await page.locator('#back').click();await page.waitForSelector('.grid [data-item="60"][data-library="2"]');
     check(await page.evaluate(()=>document.activeElement?.dataset.item==='60'&&document.activeElement?.dataset.library==='2'),'Return focus selected the same ID in the wrong media library');
+  });
+  await run('性能回归：大列表内部方向移动保持行列且不读取整页几何', async () => {
+    await page.locator('.nav [data-route="movies"]').click();await page.waitForSelector('.grid .movie');await page.locator('#load-more').click();await page.waitForFunction(()=>document.querySelectorAll('.grid .movie').length===120);
+    await page.locator('.grid .movie').nth(45).focus();const columns=await page.locator('.grid').evaluate(el=>getComputedStyle(el).gridTemplateColumns.trim().split(/\s+/).length);
+    await page.evaluate(()=>{window.__rectOriginal=Element.prototype.getBoundingClientRect;window.__rectReads=0;Element.prototype.getBoundingClientRect=function(...args){__rectReads++;return Reflect.apply(__rectOriginal,this,args)}});
+    try{
+      for(const[key,index]of[['ArrowRight',46],['ArrowLeft',45],['ArrowDown',45+columns],['ArrowUp',45]]){await page.evaluate(()=>window.__rectReads=0);await page.keyboard.press(key);const state=await page.evaluate(()=>({index:[...document.querySelectorAll('.grid .movie')].indexOf(document.activeElement),reads:__rectReads}));check(state.index===index,'Interior navigation changed row/column');check(state.reads<=8,'Interior navigation still scans whole grid geometry');}
+    }finally{await page.evaluate(()=>{Element.prototype.getBoundingClientRect=__rectOriginal;delete window.__rectOriginal;delete window.__rectReads})}
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases };
   check(cases.length, 'No UI checks matched the filter');

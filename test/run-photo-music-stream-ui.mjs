@@ -1,3 +1,4 @@
+import { listenBrowser } from '../lib/browser-listen.mjs';
 import { playwrightStatus } from '../tools/playwright-status.mjs';
 // Real browser / real MP3 regression. All GainNodes remain zero throughout.
 import http from 'node:http';
@@ -18,7 +19,7 @@ const server=http.createServer(async(req,res)=>{
     res.writeHead(200,{'Content-Type':'audio/mpeg','Content-Length':body.length});res.end(body);return;
   }
   res.writeHead(404);res.end();
-});server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
+});await listenBrowser(server);const base='http://127.0.0.1:'+server.address().port;
 const code=`async page=>{
   const base=${JSON.stringify(base)},cases=[];const assert=(value,message)=>{if(!value)throw Error(message);};const test=async(name,fn)=>{try{cases.push({name,ok:true,details:await fn()});}catch(error){cases.push({name,ok:false,error:error.message});}};
   async function boot(options={}){
