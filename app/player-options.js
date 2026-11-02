@@ -39,8 +39,8 @@
     function saveLocal() { try { store?.set('player.preferences', JSON.stringify(S.preferences)); } catch {} }
     async function persist(patch, generation) {
       S.preferences = { ...S.preferences, ...patch, subtitle: { ...S.preferences.subtitle, ...patch.subtitle } }; saveLocal();
-      try { await api('/api/play/preferences', { id: S.id, preferences: patch }, S.abort?.signal); }
-      catch (error) { if (same(generation)) { S.message = '已应用到当前播放，播放偏好未保存：' + error.message; toast('播放偏好未能同步'); } }
+      try { await api('/api/play/preferences', { id: S.id, preferences: patch }, S.abort?.signal); return true; }
+      catch (error) { if (same(generation)) { S.message = '已应用到当前播放，播放偏好未保存：' + error.message; toast('播放偏好未能同步'); } return false; }
     }
     function content() {
       const p = current(), selected = p?.quality?.id || p?.qualityId || S.qualityId || S.options?.selected || 'original';
@@ -130,10 +130,10 @@
           let applied;
           if ('offset' in patch) applied = tracks.setOffset(patch.offset);
           if (Object.keys(patch).some(k => k !== 'offset')) applied = tracks.setStyle(Object.fromEntries(Object.entries(patch).filter(([k]) => k !== 'offset')));
-          await persist({ subtitle: patch }, generation);
-          if (applied?.applied === false) S.message = '已保存偏好；' + (applied.reason || '当前字幕尚未提供可调整的文本。');
+          const saved = await persist({ subtitle: patch }, generation);
+          if (same(generation) && applied?.applied === false) S.message = (saved ? '已保存偏好；' : '播放偏好未保存；') + (applied.reason || '当前字幕尚未提供可调整的文本。');
         }
-        if (action === 'language') { let applied = tracks?.selectLanguage?.('subtitle', value); await persist({ subtitle: { language: value } }, generation); if (applied?.applied === false || !tracks?.selectLanguage) S.message = '已保存语言偏好；当前没有对应的可用轨道。'; }
+        if (action === 'language') { const applied = tracks?.selectLanguage?.('subtitle', value), saved = await persist({ subtitle: { language: value } }, generation); if (same(generation) && (applied?.applied === false || !tracks?.selectLanguage)) S.message = (saved ? '已保存语言偏好；' : '语言偏好未保存；') + '当前没有对应的可用轨道。'; }
         if (action === 'online-download') { const result = await api('/api/play/subtitle', { id: S.id, action: 'download', resultId: value }, S.abort?.signal); if (same(generation)) { if (result.subtitle?.id) { S.options ||= { subtitles: [] }; S.options.subtitles ||= []; S.options.subtitles.push(result.subtitle); await applyExternal(result.subtitle.id, generation); } else S.message = '下载请求已提交，请稍后重新读取字幕。'; } }
         if (action === 'delete') { await api('/api/play/subtitle', { id: S.id, action: 'delete', subtitleId: value }, S.abort?.signal); if (same(generation)) { S.options = null; await open('manage'); return; } }
       } catch (error) { if (same(generation)) { S.message = error.message || '操作失败'; toast(S.message); } }

@@ -1,3 +1,4 @@
+import { playwrightStatus } from '../tools/playwright-status.mjs';
 import http from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -16,5 +17,5 @@ const script = (await readFile(join(project, 'test/player-options-ui.js'), 'utf8
 const runtime = join(project, '.local/player-options-ui-runtime.js'); await writeFile(runtime, script);
 let log = '';
 async function cli(args) { const child = spawn(process.execPath, [join(project, 'node_modules/@playwright/cli/playwright-cli.js'), '-s=' + session, ...args], { cwd: project, windowsHide: true, stdio: ['ignore','pipe','pipe'] }); let output = ''; child.stdout.on('data', b => output += b); child.stderr.on('data', b => output += b); const [status] = await once(child, 'exit'); log += output; return { status, output }; }
-try { const opened = await cli(['open','about:blank','--browser=chrome']); if (opened.status) throw new Error(opened.output); const result = await cli(['run-code','--filename=' + runtime]); const start = result.output.indexOf('### Result'), end = result.output.indexOf('### Ran Playwright code', start); console.log(start >= 0 ? result.output.slice(start, end < 0 ? undefined : end).trim() : result.output); process.exitCode = result.status; }
+try { const opened = await cli(['open','about:blank','--browser=chrome']); if (opened.status) throw new Error(opened.output); const result = await cli(['run-code','--filename=' + runtime]); const start = result.output.indexOf('### Result'), end = result.output.indexOf('### Ran Playwright code', start); console.log(start >= 0 ? result.output.slice(start, end < 0 ? undefined : end).trim() : result.output); process.exitCode = playwrightStatus(result); }
 finally { await cli(['close']); await new Promise(r => server.close(r)); await writeFile(join(project, 'output/playwright/player-options-ui.log'), log); }

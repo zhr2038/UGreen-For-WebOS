@@ -23,7 +23,7 @@ async page => {
         throw new Error('Unexpected API route');
       };
       let tracks;
-      if (config.tracks) tracks = { state: () => ({ audio: nativeAudio.map((a,i) => ({ ...a, id: 'runtime-audio:' + i, index: i })), subtitles: nativeText.map((a,i) => ({ ...a, showing: a.mode === 'showing', id: 'runtime-text:' + i, index: i })) }), selectAudio: id => { po.events.push({ audio: id }); nativeAudio.forEach((a,i) => a.enabled = id === 'runtime-audio:' + i); }, selectText: id => { po.events.push({ text: id }); nativeText[0].mode = 'showing'; }, off: () => { po.events.push({ off: true }); nativeText.forEach(t => t.mode = 'disabled'); }, selectExternal: async id => { po.events.push({ external: id }); await api('/api/play/subtitle', { id: po.play.id, subtitleId: id, format: 'vtt' }); }, setOffset: value => { po.events.push({ offset: value }); return { applied: true }; }, setStyle: value => { po.events.push({ style: value }); return { applied: true }; }, selectLanguage: () => ({ applied: false }), setRate: rate => video.playbackRate = rate, setFit: fit => video.style.objectFit = fit };
+      if (config.tracks) tracks = { state: () => ({ audio: nativeAudio.map((a,i) => ({ ...a, id: 'runtime-audio:' + i, index: i })), subtitles: nativeText.map((a,i) => ({ ...a, showing: a.mode === 'showing', id: 'runtime-text:' + i, index: i })) }), selectAudio: id => { po.events.push({ audio: id }); nativeAudio.forEach((a,i) => a.enabled = id === 'runtime-audio:' + i); }, selectText: id => { po.events.push({ text: id }); nativeText[0].mode = 'showing'; }, off: () => { po.events.push({ off: true }); nativeText.forEach(t => t.mode = 'disabled'); }, selectExternal: async id => { po.events.push({ external: id }); await api('/api/play/subtitle', { id: po.play.id, subtitleId: id, format: 'vtt' }); }, setOffset: value => { po.events.push({ offset: value }); return { applied: true }; }, setStyle: value => { po.events.push({ style: value }); return { applied: !config.styleUnavailable, reason: config.styleUnavailable ? '当前没有文本字幕' : undefined }; }, selectLanguage: () => ({ applied: false }), setRate: rate => video.playbackRate = rate, setFit: fit => video.style.objectFit = fit };
       po.panel = window.createPlayerOptions({ video, api, asset: path => 'http://127.0.0.1' + path, root: document.querySelector('#dialog'), getPlayback: () => po.play, tracks, toast: message => po.events.push({ toast: message }), onClose: () => po.closed++, onSourceSwitch: async (response, context) => po.switches.push({ response, id: context.id, sourceUrl: context.sourceUrl, paused: context.paused }) });
     }, config);
   }
@@ -91,6 +91,39 @@ async page => {
     await page.evaluate(() => po.panel.key(new KeyboardEvent('keydown', { keyCode: 461, cancelable: true }))); await page.waitForSelector('.player-options[data-page="settings"]');
     const box = await page.locator('.player-options').boundingBox(); assert(box.x >= 0 && box.y >= 0 && box.y + box.height <= 1080, 'Panel exceeds the TV viewport');
     await page.screenshot({ path: 'output/playwright/player-options-settings.png' });
+  });
+  await test('完整功能：三种画面比例改变实际对象样式且保存对应偏好', async () => {
+    await boot({ tracks: true });for(const fit of ['contain','cover','fill']){await open('fit');await click('fit',fit);await page.waitForFunction(fit=>document.querySelector('video').style.objectFit===fit,fit);assert(await page.evaluate(fit=>po.calls.some(c=>c.body?.preferences?.fit===fit),fit),'Fit preference missing');}
+  });
+  await test('完整功能：播放模式覆盖顺序终点列表循环和单集循环', async () => {
+    await boot();for(const [mode,expected]of [['sort_list',null],['loop_list',0],['loop_single',2]]){await open('mode');await click('mode',mode);await page.waitForFunction(mode=>po.panel.mode()===mode,mode);assert(await page.evaluate(({expected})=>po.panel.nextIndex(2,3)===expected,{expected}),'Wrong last-item policy '+mode);}
+    assert(await page.evaluate(()=>po.panel.nextIndex(-1,3)===null&&po.panel.nextIndex(3,3)===null&&po.panel.nextIndex(0,0)===null),'Invalid queue index accepted');
+  });
+  await test('完整功能：跳片头片尾标记未加载不可操作加载后可开关', async () => {
+    await boot();await open('settings');assert(await page.locator('[data-po-action="skip"]').isDisabled(),'Skip was enabled without NAS marks');
+    await page.evaluate(()=>{po.play.skips={enabled:false,ranges:[]};po.panel.render();});await click('skip');await page.waitForFunction(()=>po.play.skips.enabled===true);assert(await page.evaluate(()=>po.calls.some(c=>c.body?.action==='skip'&&c.body.enabled===true)),'Skip state was not persisted');
+    await click('skip');await page.waitForFunction(()=>po.play.skips.enabled===false);
+  });
+  await test('完整功能：内嵌字幕启用和关闭更新真实轨道状态', async () => {
+    await boot();await open('subtitles');await click('native-subtitle','native-text:0');await page.waitForFunction(()=>document.querySelector('video').textTracks[0].mode==='showing');await click('subtitle-off');await page.waitForFunction(()=>document.querySelector('video').textTracks[0].mode==='disabled');
+    assert(await page.evaluate(()=>po.calls.some(c=>c.body?.preferences?.subtitle?.selection?.kind==='off')),'Subtitle-off preference absent');
+  });
+  await test('完整功能：直通音频拒绝非1倍速且不保存失败选择', async () => {
+    await boot();await page.evaluate(()=>po.play.passthrough=true);await open('rate');await click('rate','1.5');await page.waitForFunction(()=>document.querySelector('.po-message').textContent.includes('直通'));
+    assert(await page.evaluate(()=>document.querySelector('video').playbackRate===1&&!po.calls.some(c=>c.body?.preferences?.rate===1.5)),'Rejected passthrough speed was applied/saved');
+  });
+  await test('完整功能：NAS选项失败仍可返回并重新读取真实档位', async () => {
+    await boot({optionsError:true});await open('quality');await page.waitForFunction(()=>document.querySelector('.po-message').textContent.includes('读取失败'));assert(await page.locator('[data-po-action="quality"][data-po-value="original"]').count()===1,'Original fallback was lost');
+    await page.evaluate(()=>po.config.optionsError=false);await click('reload');await page.waitForSelector('[data-po-action="quality"][data-po-value="480P@720x400"]');
+  });
+  await test('完整功能：取消删除字幕返回管理页不会发删除请求', async () => {
+    await boot({tracks:true});await open('manage');await click('confirm-delete','external:known');await click('open','manage');assert(await page.evaluate(()=>!po.calls.some(c=>c.body?.action==='delete')),'Cancel deleted NAS subtitle');assert(await page.locator('[data-po-action="confirm-delete"]').count()===1,'Cancel lost the original subtitle entry');
+  });
+  await test('完整功能：字幕语言偏好同步失败不得提示已保存', async () => {
+    await boot({tracks:true,preferencesError:true});await open('language');await click('language','zh');await page.waitForFunction(()=>po.calls.some(c=>c.path==='/api/play/preferences'));await page.waitForTimeout(30);const message=await page.locator('.po-message').textContent();assert(message.includes('未保存')&&!message.includes('已保存语言偏好'),'Failed language save reported success: '+message);
+  });
+  await test('完整功能：当前字幕不可调整且偏好同步失败不得覆盖成已保存', async () => {
+    await boot({tracks:true,preferencesError:true,styleUnavailable:true});await open('subtitleStyle');await click('size','125');await page.waitForFunction(()=>po.calls.some(c=>c.path==='/api/play/preferences'));await page.waitForTimeout(30);const message=await page.locator('.po-message').textContent();assert(message.includes('未保存')&&!message.includes('已保存偏好'),'Failed style save reported success: '+message);
   });
   const report = { passed: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, cases: results }; if (report.failed) throw new Error(JSON.stringify(report)); return report;
 }

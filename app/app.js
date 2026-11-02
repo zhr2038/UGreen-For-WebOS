@@ -234,7 +234,9 @@
       const query = new URLSearchParams({ kind: S.route, page: S.page, sort: S.sort || '2' });
       if (S.libraryId) query.set('id', S.libraryId);
       const data = await api('/api/library?' + query, undefined, controller.signal); if (epoch !== S.epoch) return;
-      S.list = reset ? data.items : S.list.concat(data.items); S.last = data.last || data.items.length === 0; S.total = data.total; S.page++;
+      const seen = new Set();
+      S.list = (reset ? data.items : S.list.concat(data.items)).filter(value => { const key = JSON.stringify([String(value.type ?? ''), String(value.libraryId ?? ''), String(value.id)]); if (seen.has(key)) return false; seen.add(key); return true; });
+      S.last = data.last || data.items.length === 0; S.total = data.total; S.page++;
       renderLibrary(); focus(root.querySelectorAll('.grid .movie')[oldCount] || root.querySelector('#load-more') || root.querySelector('button'));
     } catch (err) { if (epoch === S.epoch) { if (reset) errorScreen(err, () => loadLibrary(true)); else { renderLibrary(); focus($('#load-more')); toast(err.message); } } }
     finally { if (S.libraryLoad === owner) { S.busy = false; S.libraryAbort = null; } }
@@ -253,8 +255,26 @@
     $('#back').onclick = back; $('#play').onclick = () => play(); $('#restart').onclick = () => play(true);
     const favoriteButton = $('#favorite'); favoriteButton.onclick = async () => {
       if (favoriteButton.disabled) return; favoriteButton.disabled = true;
-      try { await api('/api/favorite', { id: i.id, type: i.type, library: i.libraryId, favorite: !i.favorite }); i.favorite = !i.favorite; favoriteButton.textContent = i.favorite ? '已收藏' : '收藏'; if (S.returnView?.route === 'favorites' && !i.favorite) { S.returnView.list = S.returnView.list.filter(v => v.id !== i.id); S.returnView.total = Math.max(0, S.returnView.total - 1); } toast(i.favorite ? '已收藏' : '已取消收藏'); }
-      catch (err) { toast(err.message); }
+      const connection = { server: S.server, token: S.token }, scope = S.accountScope, epoch = S.epoch, selected = !i.favorite;
+      const sameAccount = () => S.server === connection.server && S.token === connection.token && S.accountScope === scope;
+      const sameItem = value => value.id === i.id && value.type === i.type && value.libraryId === i.libraryId;
+      try {
+        await api('/api/favorite', { id: i.id, type: i.type, library: i.libraryId, favorite: selected }, undefined, connection);
+        if (!sameAccount()) return;
+        i.favorite = selected;
+        if (S.home) { const list = S.home.favorites || []; S.home.favorites = selected ? list.some(sameItem) ? list : [{ ...i }, ...list] : list.filter(value => !sameItem(value)); }
+        if (S.returnView?.route === 'favorites' && !selected) { const count = S.returnView.list.length; S.returnView.list = S.returnView.list.filter(value => !sameItem(value)); S.returnView.total = Math.max(0, S.returnView.total - (count - S.returnView.list.length)); }
+        if (epoch === S.epoch && favoriteButton.isConnected) { favoriteButton.textContent = selected ? '已收藏' : '收藏'; toast(selected ? '已收藏' : '已取消收藏'); }
+        else if (S.route === 'home' || S.route === 'favorites') {
+          const view = captureView(), navRoute = document.activeElement?.closest('.nav') ? document.activeElement.dataset.route : null;
+          if (S.route === 'home') renderHome(true);
+          else { const count = S.list.length; if (!selected) S.list = S.list.filter(value => !sameItem(value)); S.total = Math.max(0, S.total - (count - S.list.length)); renderLibrary(); }
+          if (navRoute) focus(root.querySelector(`.nav [data-route="${CSS.escape(navRoute)}"]`));
+          else if (view.focusKey) focus(root.querySelector(`[data-focus="${CSS.escape(view.focusKey)}"]`) || root.querySelector('button'));
+          const screen = root.querySelector('.screen'); if (screen) screen.scrollTop = view.scrollTop;
+        }
+      }
+      catch (err) { if (sameAccount() && epoch === S.epoch) toast(err.message); }
       finally { favoriteButton.disabled = false; }
     };
     root.querySelectorAll('[data-file]').forEach(b => b.onclick = () => play(false, Number(b.dataset.file))); firstFocus();

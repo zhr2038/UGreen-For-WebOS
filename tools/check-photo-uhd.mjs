@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
+import { playwrightStatus } from './playwright-status.mjs';
 const project = resolve(import.meta.dirname, '..'), output = join(project, '.local/reference/photo-uhd');
 await mkdir(output, { recursive: true });
 const pixels = Buffer.alloc(3840 * 2160 * 3);
@@ -30,7 +31,7 @@ async function run(args) { const child = spawn(process.execPath, [cli, '-s=' + s
 let status = 1;
 try {
   const opened = await run(['open', 'about:blank', '--browser=chrome']); if (opened.status) throw new Error(opened.text);
-  const result = await run(['run-code', '--filename=' + runtime]); status = result.status;
+  const result = await run(['run-code', '--filename=' + runtime]); status = playwrightStatus(result);
   const start = result.text.indexOf('### Result'), end = result.text.indexOf('### Ran Playwright code'); const report = result.text.slice(Math.max(0, start), end > start ? end : undefined).trim(); await writeFile(join(output, 'browser-report.txt'), report);
   if (status) throw new Error(report);
   const execute = promisify(execFile), probes = [];

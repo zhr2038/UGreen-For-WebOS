@@ -47,7 +47,7 @@ async page => {
     if (url.pathname === '/api/home') data = { name: 'Mock NAS', accountScope: 'synthetic-account-' + (scenario.account || 'a'), hero: [], recent: [], updates: [], favorites: [], libraries: [] };
     else if (url.pathname === '/api/photos/albums') data = { items: [{ id: 'album-' + (scenario.account || 'a'), type: 1, name: '示例相册', total: 2, cover: '/mock.png' }], total: 1, offset: 0, limit: 48, last: true };
     else if (url.pathname === '/api/photos/categories') data = { items: [{ id: 'groupcap', name: '示例分类', total: 1, cover: '/mock.png' }], total: 1, offset: 0, limit: 48, last: true };
-    else if (url.pathname === '/api/photos/info') { data = { item: photo(url.searchParams.get('asset')), metadata: { camera: 'Test Camera', iso: '100' } }; if (scenario.deferInfo) await new Promise(resolve => infoPending.push({ resolve })); }
+    else if (url.pathname === '/api/photos/info') { data = { item: photo(url.searchParams.get('asset')), metadata: { camera: 'Test Camera', iso: '100', ...(scenario.metadataDates ? {created:'1767225600',modified:'1767225600000'} : {}) } }; if (scenario.deferInfo) await new Promise(resolve => infoPending.push({ resolve })); }
     else if (url.pathname === '/api/photos/preview-visibility') { const show = route.request().postDataJSON().show; data = { item: { ...photo(1), sensitive: true, revealed: show, original: show ? '/photo-original/original-1' : '', motion: '', view: show ? '/photo-image/sensitive-visible-1' : '/photo-image/preview-1' } }; }
     else if (url.pathname === '/api/photos/music') data = { items: [{ id: 'track-' + (scenario.account || 'a'), name: '示例背景音乐 ' + (scenario.account || 'a'), stream: '/photo-music/music-' + (scenario.account || 'a'), mime: 'audio/mpeg' }] };
     else if (url.pathname === '/api/photos/uhd') { const id = (uhdUploads.length + 1).toString(16).padStart(40, '0'); uhdUploads.push({ id, type: route.request().headers()['content-type'], asset: url.searchParams.get('asset'), bytes: route.request().postDataBuffer()?.length }); if (scenario.slowUhdUpload) await new Promise(r => setTimeout(r, 250)); data = { id, url: '/photo-uhd/' + id, nativeUhdConfirmed: false }; }
@@ -67,6 +67,9 @@ async page => {
       const items = Array.from({ length: Math.min(48, Math.max(0, total - offset)) }, (_, i) => photo(offset + i + 1));
       if (scenario.sensitive && items[0]) items[0] = { ...items[0], sensitive: true, revealed: false, original: '', motion: '' };
       if (scenario.gifSecond && items[1]) items[1] = { ...items[1], format: 'gif' };
+      if (scenario.gifFirst && items[0]) items[0] = { ...items[0], format: 'gif', size: 1024 };
+      if (scenario.unsupportedOriginalFirst && items[0]) items[0] = { ...items[0], format: 'heic', output: { browserOriginalCandidate: false, nativeUhdConfirmed: false } };
+      if (scenario.oversizeFirst && items[0]) items[0] = { ...items[0], ...scenario.oversizeFirst };
       if (scenario.videoSecond && offset === 0 && items[1]) items[1] = { ...items[1], kind: 'video', stream: '/photo-video/clip-2', original: '', motion: '' };
       data = { items, total, offset, limit: 48, last: offset + items.length >= total };
     }
@@ -360,6 +363,76 @@ async page => {
     await page.locator('[data-photo="1"]').click(); await page.locator('#photo-video-quality').click(); await page.waitForSelector('[data-photo-quality="1"]'); await page.evaluate(() => window.__queuedPhotoSelection = document.querySelector('[data-photo-quality="0"]').onclick); await page.locator('[data-photo-quality="1"]').click(); await page.waitForFunction(() => __pendingPhotoMedia.length === 1); await page.evaluate(() => __queuedPhotoSelection());
     check(requests.filter(value => value.path === '/api/photos/video/quality').length === 1 && await page.locator('#photo-video-quality').isDisabled(), 'A stale selection replaced the candidate while its first frame was pending'); await page.evaluate(() => __pendingPhotoMedia[0]()); await until(() => commitPending.length === 1); await page.evaluate(() => __queuedPhotoSelection()); check(requests.filter(value => value.path === '/api/photos/video/quality').length === 1 && !requests.some(value => value.path.endsWith('/video/discard')), 'Busy was cleared before commit completed');
     scenario.deferCommit = false; commitPending[0].resolve(); await page.waitForFunction(() => document.querySelector('#photo-video-quality')?.textContent.includes('1080P') && !document.querySelector('#photo-video-quality').disabled); await page.locator('#photo-video-quality').click(); await page.locator('[data-photo-quality="0"]').click(); await page.waitForFunction(() => document.querySelector('#photo-video-quality')?.textContent.includes('原画') && !document.querySelector('#photo-video-quality').disabled); check(requests.filter(value => value.path === '/api/photos/video/quality').length === 2, 'Completed transaction did not release busy for an explicit next selection');
+  });
+  await run('全功能-时间线分页排序与全部媒体过滤都发出正确查询', { total: 100 }, async () => {
+    check(await page.locator('[data-photo]').count() === 48, 'First page is not bounded');
+    await page.locator('#photo-next-page').click(); await page.waitForFunction(() => document.querySelector('.photo-pagination>span')?.textContent === '49–96 / 100');
+    await page.locator('#photo-sort').selectOption('oldest'); await page.waitForFunction(() => document.querySelector('.photo-pagination>span')?.textContent === '1–48 / 100');
+    check(calls.some(value => value.startsWith('/api/photos/list?') && new URL(value, base).searchParams.get('sort') === 'oldest' && new URL(value, base).searchParams.get('offset') === '0'), 'Sort did not reset pagination');
+    for (const value of ['image','video','live','gif','raw','all']) { await page.locator('#photo-filter').selectOption(value); await page.waitForSelector('[data-photo="0"]'); check(new URL(calls.filter(value => value.startsWith('/api/photos/list?')).at(-1), base).searchParams.get('filter') === value, 'Wrong filter query: ' + value); }
+  });
+  await run('全功能-相册分类喜欢和文字搜索入口可达并保留查询上下文', {}, async () => {
+    await page.locator('[data-photo-tab="albums"]').click(); await page.waitForSelector('[data-album]'); await page.locator('[data-album="0"]').click(); await page.waitForSelector('[data-photo="0"]');
+    check(calls.some(value => new URL(value,base).searchParams.get('album') === 'album-a'), 'Album handle not sent'); await page.locator('#photo-album-back').click(); await page.waitForSelector('[data-album]');
+    await page.locator('[data-photo-tab="classifications"]').click(); await page.waitForSelector('#photo-category');
+    for(const kind of ['figure','pet','object','custom','city']){await page.locator('#photo-category').selectOption(kind);await page.waitForSelector('[data-photo-group]');check(calls.some(value=>value.startsWith('/api/photos/categories?')&&new URL(value,base).searchParams.get('kind')===kind),'Category missing: '+kind);}
+    await page.locator('[data-photo-group="0"]').click();await page.waitForSelector('[data-photo="0"]');check(calls.some(value=>new URL(value,base).searchParams.get('group')==='groupcap'),'Group handle not sent');
+    await page.locator('[data-photo-tab="favorites"]').click();await page.waitForSelector('[data-photo="0"]');check(calls.some(value=>new URL(value,base).searchParams.get('favorites')==='1'),'Favorites query absent');
+    await page.locator('[data-photo-tab="search"]').click();await page.waitForSelector('#photo-search');check(await page.locator('[data-photo]').count()===0,'Empty search loaded unrelated items');
+    for(const type of ['8','5']){await page.locator('#photo-search').fill('合成 测试');await page.locator('#photo-search-type').selectOption(type);await page.locator('#photo-search-form button').click();await page.waitForSelector('[data-photo="0"]');check(calls.some(value=>{const q=new URL(value,base).searchParams;return q.get('search')==='合成 测试'&&q.get('searchType')===type;}),'Search/OCR type absent: '+type);}
+  });
+  await run('全功能-图片浏览跨页前进后退并恢复当前列表焦点', { total: 100 }, async () => {
+    await page.locator('[data-photo="47"]').click();await page.locator('#photo-next').click();await page.waitForFunction(()=>document.querySelector('.photo-counter')?.textContent==='49 / 100');
+    await page.locator('#photo-previous').click();await page.waitForFunction(()=>document.querySelector('.photo-counter')?.textContent==='48 / 100');await page.locator('#photo-close').click();await page.waitForSelector('[data-photo="47"]');
+    check(await page.evaluate(()=>document.activeElement.dataset.photo)==='47','Viewer exit lost current list focus');
+  });
+  await run('全功能-实况动态播放结束返回静态照片且不创建画质任务', {}, async () => {
+    await page.locator('[data-photo="0"]').click();await page.locator('#photo-motion').click();await page.waitForSelector('#photo-clip');check(await page.locator('#photo-clip').evaluate(v=>v.src.includes('/photo-motion/')),'Wrong live source');
+    check(await page.locator('#photo-video-quality').count()===0,'Live motion entered full video task');await page.locator('#photo-clip').evaluate(v=>v.dispatchEvent(new Event('ended')));await page.waitForSelector('#photo-full');check(!calls.some(value=>value.startsWith('/api/photos/video/')),'Live ended leaked a NAS video task');
+  });
+  await run('全功能-普通相册视频首次按遥控播放暂停键应立即暂停', { videoSecond:true }, async () => {
+    await page.locator('[data-photo="1"]').click();check(await page.locator('#photo-clip').evaluate(v=>!v.paused),'Normal video did not start');
+    await page.evaluate(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'MediaPlayPause',code:'MediaPlayPause',keyCode:179,bubbles:true})));
+    check(await page.locator('#photo-clip').evaluate(v=>v.paused),'First media play/pause key left the normally opened video playing');
+  });
+  await run('全功能-幻灯片设置能更换并关闭音乐且显示模式持久化', { music:true }, async () => {
+    await page.locator('[data-photo="0"]').click();await page.locator('#photo-settings').click();await page.locator('#photo-music-setting').click();await page.waitForSelector('[data-photo-track]');
+    await page.locator('#photo-music-off').click();check(await page.evaluate(()=>localStorage.getItem('cinema.photoMusicOn'))==='0','Music off was not stored');
+    await page.locator('#photo-music-setting').click();await page.locator('[data-photo-track="0"]').click();check(await page.evaluate(()=>localStorage.getItem('cinema.photoMusicOn'))==='1','Selected music not enabled');
+    await page.locator('[data-photo-setting="display"]').click();await page.locator('#photo-info-close').click();check(await page.locator('#photo-full').evaluate(i=>i.classList.contains('photo-fill')),'Fill did not apply');check(await page.evaluate(()=>localStorage.getItem('cinema.photoDisplay'))==='fill','Display choice not saved');
+  });
+  await run('全功能-后台准备隐藏取消后返回同张照片继续静默升级', { uhd:true, autoUhd:true, deferEncode:true }, async () => {
+    await page.locator('[data-photo="0"]').click();await page.waitForFunction(()=>__uhdEncodePending.length===1);
+    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});check(await page.evaluate(()=>__uhdSources[0].aborted),'Hidden did not cancel');
+    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));});await page.waitForTimeout(600);
+    check(await page.evaluate(()=>__uhdSources.length===2),'Returning to the same photo did not resume background preparation');
+  });
+  await run('全功能-不支持的原图操作不应关闭已经启用的自动4K', { uhd:true, autoUhd:true, deferEncode:true, unsupportedOriginalFirst:true }, async () => {
+    await page.locator('[data-photo="0"]').click();await page.waitForFunction(()=>__uhdEncodePending.length===1);await page.locator('#photo-original').click();
+    check(await page.evaluate(()=>localStorage.getItem('cinema.photoUhdBackground')==='1'&&!__uhdSources[0].aborted),'Rejected original request silently disabled automatic UHD');
+  });
+  for (const [name, photo] of [['60MP',{width:10000,height:6000}],['100MP',{width:10000,height:10000}],['超32MiB',{width:4032,height:3024,size:32*1024*1024+1}]]) {
+    await run('超大照片-'+name+'在下载编码前静默保留预览且手动操作有提示', {uhd:true,autoUhd:true,oversizeFirst:photo}, async()=>{
+      await page.locator('[data-photo="0"]').click();await page.waitForTimeout(650);
+      check(await page.evaluate(()=>__uhdSources.length===0),'Oversize photo reached original download/encoding');
+      check(await page.locator('#photo-full').evaluate(image=>image.naturalWidth>0&&image.style.visibility!=='hidden'),'Oversize preview disappeared');
+      check(await page.locator('#photo-uhd-status').count()===0&&!await page.locator('#toast').evaluate(el=>el.classList.contains('visible')),'Automatic oversize preflight showed an intrusive error');
+      await page.locator('#photo-info').click();await page.locator('#photo-info-close').click();await page.waitForTimeout(450);check(await page.evaluate(()=>__uhdSources.length===0),'Closing info retried an oversized original');
+      await page.locator('#photo-uhd').click();await page.waitForFunction(()=>{const message=document.querySelector('#photo-uhd-status')?.textContent||document.querySelector('#toast')?.textContent||'';return /上限|过大|超过|尺寸|文件/.test(message);});
+      check(await page.evaluate(()=>__uhdSources.length===0),'Manual oversize attempt downloaded the original before rejection');
+    });
+  }
+  await run('补充回归-照片信息中的Unix秒和毫秒显示为日期', { metadataDates:true }, async()=>{
+    await page.locator('[data-photo="0"]').click();await page.locator('#photo-info').click();await page.waitForFunction(()=>document.querySelector('#photo-info-content dd')?.textContent);
+    const values=await page.locator('#photo-info-content dl>div').evaluateAll(rows=>Object.fromEntries(rows.map(r=>[r.querySelector('dt').textContent,r.querySelector('dd').textContent])));
+    check(values['拍摄时间']?.includes('年')&&!/^\d{10,13}$/.test(values['拍摄时间']),'Creation time remained a Unix number');
+    check(values['修改时间']?.includes('年')&&!/^\d{10,13}$/.test(values['修改时间']),'Modification time remained a Unix number');
+  });
+  await run('补充回归-GIF默认使用动画原图且预览按钮可切静态再返回动画', { gifFirst:true }, async()=>{
+    await page.locator('[data-photo="0"]').click();await page.waitForFunction(()=>document.querySelector('#photo-full')?.src.includes('/photo-original/'));
+    check(await page.locator('#photo-original').textContent()==='预览图','GIF original state mislabeled');
+    await page.locator('#photo-original').click();await page.waitForFunction(()=>document.querySelector('#photo-full')?.src.includes('/photo-image/'));
+    await page.locator('#photo-original').click();await page.waitForFunction(()=>document.querySelector('#photo-full')?.src.includes('/photo-original/'));
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases }; check(cases.length, 'No photo tests matched'); if (report.failed) throw new Error(JSON.stringify(report)); return report;
 }

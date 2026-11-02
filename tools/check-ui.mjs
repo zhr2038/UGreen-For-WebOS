@@ -4,6 +4,7 @@ import { extname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import sharp from 'sharp';
+import { playwrightStatus } from './playwright-status.mjs';
 
 const project = resolve(import.meta.dirname, '..');
 const cli = join(project, 'node_modules/@playwright/cli/playwright-cli.js');
@@ -41,10 +42,10 @@ let status = 1;
 try {
   const opened = await run(['open', 'about:blank', '--browser=chrome']);
   if (opened.status !== 0) throw new Error(opened.text);
-  const checked = await run(['run-code', '--filename=' + runtime]); status = checked.status || 0;
+  const checked = await run(['run-code', '--filename=' + runtime]); status = playwrightStatus(checked);
   const start = checked.text.indexOf('### Result');
   console.log(start >= 0 ? checked.text.slice(start, checked.text.indexOf('### Ran Playwright code', start) < 0 ? undefined : checked.text.indexOf('### Ran Playwright code', start)).trim() : checked.text);
-} catch (error) { console.error(error.message); }
+} catch (error) { status = 1; console.error(error.message); }
 finally {
   await run(['close']);
   await new Promise(resolve => server.close(resolve));

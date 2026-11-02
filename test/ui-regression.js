@@ -54,11 +54,12 @@ async page => {
     if (url.pathname === '/api/direct/cancel') return response(route, { ok: true });
     if (url.host.startsWith('bad-nas.test')) return response(route, { error: '配对码错误' }, 401);
     if (url.pathname === '/api/home') return response(route, { connectionScope:state.connectionScope||'owner-A',accountScope: state.accountScope || 'account-A', name: '测试 NAS', connection: 'UGREENlink 中继', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
-    if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; return response(route, { items: Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1)), total: 120, last: n >= 2 }); }
-    if (url.pathname === '/api/detail') return response(route, { item: movie(Number(url.searchParams.get('id'))), files: [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }], actors: [], technical: { container: 'mp4', video_info: { codec: 'h264', resolution: '1920x1080' }, audio_info: [] } });
+    if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; const items=state.overlapPages&&n===2?[movie(60),{...movie(60),libraryId:2},...Array.from({length:58},(_,j)=>movie(61+j))]:Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1));return response(route, { items, total: 120, last: n >= 2 }); }
+    if (url.pathname === '/api/detail') return response(route, { item: { ...movie(Number(url.searchParams.get('id'))), favorite: Boolean(state.detailFavorite) }, files: [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }], actors: [], technical: { container: 'mp4', video_info: { codec: 'h264', resolution: '1920x1080' }, audio_info: [] } });
+    if (url.pathname === '/api/favorite') { if (state.favoriteGate) await state.favoriteGate.promise; return response(route, { ok: true }); }
     if (url.pathname === '/api/play') { const gate = state.playGate; if (gate) await gate.promise; if (state.playError) return response(route, { error: '无法打开版本' }, 503); const id = 'play-' + (++state.playId); return response(route, { id, stream: '/media/' + id, fileIndex: call.body.fileIndex || 0, title: '测试播放', position: call.body.restart ? 0 : 120, duration: 3600, technical: {} }); }
     if (url.pathname === '/api/play/options') { if (state.optionsGate) await state.optionsGate.promise; return response(route, { qualities: [{ id: 'original', label: '原画' }, { id: '720p', label: '720P', resolution: '1280×720' }, ...(state.threeQualities ? [{ id: '480p', label: '480P', resolution: '720×480' }] : [])], audio: [], subtitles: [], selected: 'original', preferences: state.preferences || { mode: 'sort_list', rate: 1, fit: 'contain' } }); }
-    if (url.pathname === '/api/play/skips') return response(route, { enabled: false, ranges: [] });
+    if (url.pathname === '/api/play/skips') return response(route, state.skips || { enabled: false, ranges: [] });
     if (url.pathname === '/api/play/quality') {
       if (call.body.action === 'commit') { state.activeSource = { id: call.body.id, sourceId: call.body.candidateId, stream: '/media/candidate', kind: 'hls', quality: { id: '720p', label: '720P' } }; if (state.commitGate) await state.commitGate.promise; return response(route, state.activeSource); }
       if (call.body.action === 'discard') return response(route, { discarded: true });
@@ -68,7 +69,7 @@ async page => {
     if (url.pathname === '/api/play/active') return response(route, state.activeSource || { sourceId: 'original' });
     if (url.pathname === '/api/play/close') return response(route, { closed: true });
     if (url.pathname === '/api/progress') { const gate = state.progressGate; if (gate) await gate.promise; if (state.progressError) return response(route, { error: 'offline' }, 503); return response(route, { ok: true }); }
-    if (url.pathname === '/api/search') { const q = url.searchParams.get('q'); if (q === 'slow' && state.searchGate) await state.searchGate.promise; return response(route, { items: [movie(q === 'slow' ? 901 : 902)] }); }
+    if (url.pathname === '/api/search') { const q = url.searchParams.get('q'); if (q === 'slow' && state.searchGate) await state.searchGate.promise; return response(route, { items: q === 'absent' ? [] : [movie(q === 'slow' ? 901 : 902)] }); }
     if (url.pathname === '/api/photos/list') { state.photoRequests++; const video = state.photoVideo; return response(route, { items: [{ id: 'p1', name: video ? '示例视频' : '示例照片', kind: video ? 'video' : 'image', thumb: '/mock-image/photo', view: '/photo-image/' + (state.photoFresh ? 'new' : 'old'), stream: video ? '/photo-video/mock' : '', width: 320, height: 180 }], total: 1, offset: 0, limit: 48, last: true }); }
     if (url.pathname === '/api/pair') return response(route, { token: 'new-client' });
     if (url.pathname === '/api/login') { if (state.loginGate) await state.loginGate.promise; return response(route, { ok: true }); }
@@ -495,6 +496,52 @@ async page => {
     await page.locator('#video').evaluate(v => v.currentTime = 800); await page.locator('#stop-player').click(); await page.waitForSelector('#play'); gate.resolve(); await delay(80);
     check(await page.locator('#play').textContent() === '继续播放 00:13:20', 'Stop saved the pre-switch position after the candidate was ready');
     check(control.calls.some(c => c.path === '/api/progress' && c.body.position === 800), 'Ready candidate final position was not reported');
+  });
+  await run('完整功能：电影电视剧收藏历史和媒体库入口均请求正确列表', async () => {
+    for (const route of ['movies','tv','favorites','history']) {
+      await page.locator(`.nav [data-route="${route}"]`).click();await page.waitForSelector('.grid [data-item]');
+      check(control.calls.filter(c=>c.path==='/api/library').at(-1).query.includes('kind='+route),'Wrong library route '+route);
+      check(await page.locator(`.nav [data-route="${route}"].active`).count()===1,'Wrong selected navigation '+route);
+    }
+    await page.locator('.nav [data-route="folders"]').click();await page.waitForSelector('[data-library-route]');await page.locator('[data-library-route]').first().click();await page.waitForSelector('.grid [data-item]');
+    check(new URLSearchParams(control.calls.filter(c=>c.path==='/api/library').at(-1).query).get('id')==='1','Media library ID was lost');
+  });
+  await run('完整功能：搜索空白不发请求无结果提示可恢复且中文查询编码正确', async () => {
+    await page.locator('.nav [data-route="search"]').click();await page.locator('#search').fill('   ');await page.locator('#search-form button').click();check(!control.calls.some(c=>c.path==='/api/search'),'Blank search sent request');
+    await page.locator('#search').fill('absent');await page.locator('#search-form button').click();await page.waitForSelector('#search-results .empty');
+    await page.locator('#search').fill('电影 & 海');await page.locator('#search-form button').click();await page.waitForSelector('#search-results [data-item]');
+    check(new URLSearchParams(control.calls.filter(c=>c.path==='/api/search').at(-1).query).get('q')==='电影 & 海','Search query was not encoded');
+  });
+  await run('完整功能：从头播放与播放结束顺序切换版本保留所选索引', async () => {
+    await detail();await page.locator('#restart').click();await page.waitForSelector('#pause');check(control.calls.filter(c=>c.path==='/api/play').at(-1).body.restart===true,'Restart did not request zero');
+    await page.locator('#video').evaluate(v=>{v.currentTime=3599;v.dispatchEvent(new Event('ended'));});await page.waitForFunction(()=>new URL(window.document.querySelector('#video').src).pathname.endsWith('/play-2'));
+    const request=control.calls.filter(c=>c.path==='/api/play').at(-1);check(request.body.fileIndex===1&&request.body.restart===true,'Ended did not advance to next version from zero');
+  });
+  await run('完整功能：片头片尾只在启用标记且范围内时自动跳过', async () => {
+    control.skips={enabled:true,ranges:[{start:0,end:60,type:'op'},{start:3500,end:3600,type:'ed'}]};await play();await page.waitForTimeout(80);
+    await page.locator('#video').evaluate(v=>{v.currentTime=10;v.dispatchEvent(new Event('timeupdate'));});check(await page.locator('#video').evaluate(v=>v.currentTime)===60,'Opening range not skipped');
+    await page.locator('#video').evaluate(v=>{v.currentTime=90;v.dispatchEvent(new Event('timeupdate'));});check(await page.locator('#video').evaluate(v=>v.currentTime)===90,'Normal content skipped');
+    await page.locator('#video').evaluate(v=>{v.currentTime=3550;v.dispatchEvent(new Event('timeupdate'));});check(await page.locator('#video').evaluate(v=>v.currentTime)>3599,'Ending range not bounded to media end');
+  });
+  await run('完整功能：上一账号迟到取消收藏不能删掉当前账号的返回列表', async () => {
+    control.detailFavorite=true;await page.locator('.nav [data-route="favorites"]').click();await page.waitForSelector('.grid [data-item]');await page.locator('.grid [data-item="1"]').click();await page.waitForSelector('#favorite');
+    const gate=deferred();control.gates.push(gate);control.favoriteGate=gate;await page.locator('#favorite').click();await page.keyboard.press('Escape');await page.waitForSelector('.nav [data-route="home"]');
+    control.accountScope='account-B';await page.locator('.nav [data-route="home"]').click();await page.waitForSelector('.hero [data-primary]');await page.locator('.nav [data-route="favorites"]').click();await page.waitForSelector('.grid [data-item]');
+    await page.locator('.grid [data-item="1"]').click();await page.waitForSelector('#favorite');gate.resolve();await delay(120);await page.keyboard.press('Escape');await page.waitForSelector('.grid [data-item]');
+    check(await page.locator('.grid [data-item="1"]').count()===1,'Old account favorite response removed current account item');
+  });
+  await run('完整功能：取消收藏后返回首页收藏片单立即反映已接受的变化', async () => {
+    control.detailFavorite=true;await detail();await page.locator('#favorite').click();await page.waitForFunction(()=>document.querySelector('#favorite')?.textContent==='收藏');await page.keyboard.press('Escape');await page.waitForSelector('.nav [data-route="home"].active');
+    const shelf=page.locator('.shelf').filter({has:page.locator('h2',{hasText:'我的收藏'})});check(await shelf.locator('[data-item="1"]').count()===0,'Accepted unfavorite remained in cached home favorites');
+  });
+  await run('完整功能：相邻页重复条目去重但跨媒体库同ID保留且仍正确完成分页', async () => {
+    control.overlapPages=true;await page.locator('.nav [data-route="movies"]').click();await page.waitForSelector('.grid [data-item]');await page.locator('#load-more').click();await page.waitForFunction(()=>document.querySelectorAll('.grid [data-item]').length>60);
+    const result=await page.locator('.grid [data-item]').evaluateAll(a=>({count:a.length,keys:a.map(b=>[b.dataset.type,b.dataset.library,b.dataset.item].join('|'))}));
+    check(result.count===119&&new Set(result.keys).size===119,'Page boundary retained a duplicate or removed a distinct library item');check(await page.locator('.grid [data-item="60"][data-library="2"]').count()===1,'Cross-library same ID was incorrectly dropped');check(await page.locator('#load-more').count()===0,'Last-page state did not advance after deduplication');
+  });
+  await run('完整功能：跨媒体库同ID影片返回时焦点回到原来的库条目', async () => {
+    control.overlapPages=true;await page.locator('.nav [data-route="movies"]').click();await page.waitForSelector('.grid [data-item]');await page.locator('#load-more').click();await page.waitForSelector('.grid [data-item="60"][data-library="2"]');await page.locator('.grid [data-item="60"][data-library="2"]').click();await page.waitForSelector('#play');await page.locator('#back').click();await page.waitForSelector('.grid [data-item="60"][data-library="2"]');
+    check(await page.evaluate(()=>document.activeElement?.dataset.item==='60'&&document.activeElement?.dataset.library==='2'),'Return focus selected the same ID in the wrong media library');
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases };
   check(cases.length, 'No UI checks matched the filter');

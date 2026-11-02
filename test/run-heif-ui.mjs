@@ -1,3 +1,4 @@
+import { playwrightStatus } from '../tools/playwright-status.mjs';
 import http from 'node:http';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -47,5 +48,5 @@ const script=`async page=>{
 }`;
 const scriptPath=join(runtime,'heif-ui-runtime.js');await writeFile(scriptPath,script);const session='heif-'+process.pid;let log='';
 async function cli(args){const child=spawn(process.execPath,[join(root,'node_modules/@playwright/cli/playwright-cli.js'),'-s='+session,...args],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);const[status]=await once(child,'exit');log+=output;return{status,output};}
-try{const open=await cli(['open','about:blank','--browser=chrome']);if(open.status)throw new Error(open.output);const result=await cli(['run-code','--filename='+scriptPath]);const start=result.output.indexOf('### Result'),end=result.output.indexOf('### Ran Playwright code',start);console.log(start>=0?result.output.slice(start,end<0?undefined:end).trim():result.output);process.exitCode=result.status;}
+try{const open=await cli(['open','about:blank','--browser=chrome']);if(open.status)throw new Error(open.output);const result=await cli(['run-code','--filename='+scriptPath]);const start=result.output.indexOf('### Result'),end=result.output.indexOf('### Ran Playwright code',start);console.log(start>=0?result.output.slice(start,end<0?undefined:end).trim():result.output);process.exitCode=playwrightStatus(result);}
 finally{await cli(['close']);server.closeAllConnections();await new Promise(r=>server.close(r));await mkdir(join(root,'output/playwright'),{recursive:true});await writeFile(join(root,'output/playwright/heif-proof.log'),log);}

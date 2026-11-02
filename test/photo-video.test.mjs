@@ -10,7 +10,7 @@ test('photo video uses the official source 5 picture ID protocol and never movie
   const options = await session.describe({ external: true }); assert.equal(options.qualities.length, 2); assert.equal(calls[0].path, 'v2/stream/transcode/info');
   const first = calls[0]; assert.equal(first.body.src_type, 5); assert.equal(first.body.video_path_id, 42); assert.equal(first.body.path_type, 1); assert.equal(Object.hasOwn(first.body, 'video_path'), false);
   assert.deepEqual(JSON.parse(Buffer.from(first.query.transcode_custom_query, 'base64')), { source_album_uuid: 'album-one', source_album_type: 2 });
-  const selected = await session.selectQuality('1080P@1920x1080'); assert.equal(selected.kind, 'hls'); assert.equal(calls[1].query.m3u8_file, 'photo-task_1920x1080.m3u8'); assert.equal(calls[1].query.src_type, 5);
+  const selected = await session.selectQuality('1080P@1920x1080'); assert.equal(selected.kind, 'hls'); assert.equal(calls[1].query.m3u8_file, 'photo-task_1920x1080.m3u8'); assert.equal(calls[1].query.src_type, 5); assert.equal(calls[1].query.prefer_h264, true, 'Album quality must request compatible video as well as audio');
   const manifest = await session.manifest(key => '/safe/' + key); assert.match(manifest.body, /\/safe\/[0-9a-f]{32}/); assert.equal(manifest.body.includes('secret'), false);
   const resourceId = manifest.body.match(/\/safe\/([0-9a-f]{32})/)[1]; const resource = session.resource(resourceId); assert.equal(resource.query.src_type, 5); assert.equal(resource.query.task_id, 'owned'); assert.equal(resource.query.token, undefined);
   await session.selectQuality('original'); assert.equal(calls.at(-1).path, 'v2/stream/transcode/close');
