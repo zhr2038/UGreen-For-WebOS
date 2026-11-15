@@ -55,6 +55,7 @@
       const live = () => epoch === generation && current(p) && !controller.signal.aborted;
       try {
         await load(context.sourceUrl || asset(candidate.stream), old, controller.signal, live);
+        if (context.verify && !context.verify()) throw new Error('电视未识别到兼容音轨');
         job.ready = true;
         await restoreTracks(old.tracks, { isCurrent: live });
         if (!live() || !context.isCurrent()) throw cancelled();
@@ -73,7 +74,7 @@
           active = actual;
         }
         if (!current(p) || epoch !== generation) return active;
-        Object.assign(p, { sourceId: active.sourceId, stream: active.stream, kind: active.kind, quality: active.quality, position: old.position });
+        Object.assign(p, { sourceId: active.sourceId, stream: active.stream, kind: active.kind, quality: active.quality, position: old.position, tvCompatible: active.tvCompatible });
         for (const warning of active.warnings || []) onWarning(warning.message);
         onChange(p); return active;
       } catch (error) {

@@ -177,8 +177,12 @@
     const p = S.playback, label = $('#player-quality-label'), detail = $('#player-quality-detail'); if (!p || !label || !detail) return;
     const pixels = video.videoWidth && video.videoHeight ? video.videoWidth + ' × ' + video.videoHeight : '';
     label.textContent = p.quality?.label || '原画';
-    detail.textContent = p.kind === 'hls' ? [pixels, 'NAS 转码'].filter(Boolean).join(' · ') : [pixels || S.detail?.item.clarity, p.technical?.video_info?.codec?.toUpperCase()].filter(Boolean).join(' · ');
+    detail.textContent = p.kind === 'hls' ? [pixels, conversionLabel(p)].filter(Boolean).join(' · ') : [pixels || S.detail?.item.clarity, p.tvCompatible ? '电视兼容' : p.technical?.video_info?.codec?.toUpperCase()].filter(Boolean).join(' · ');
     $('#player-quality')?.setAttribute('aria-label', '选择画质，当前为' + label.textContent);
+  }
+  function conversionLabel(playback) {
+    if (playback.kind !== 'hls') return '';
+    return playback.quality?.id === 'audio-compatible' ? '仅转换音轨' : 'NAS 转码';
   }
   function releasePlayback(p) { if (!p) return; (p.reportPromise || Promise.resolve()).finally(() => api('/api/play/close', { id: p.id }, undefined, p.connection)).catch(() => {}); }
   function resumeKey(id, scope = S.accountScope) { return (scope || S.server + '|' + S.token) + '|' + String(id); }
@@ -190,9 +194,26 @@
   }
   async function loadPlaybackOptions(p) {
     try {
-      await api('/api/play/options?id=' + encodeURIComponent(p.id), undefined, undefined, p.connection);
+      const options = await api('/api/play/options?id=' + encodeURIComponent(p.id), undefined, undefined, p.connection);
+      await recoverMovieAudio(p, options);
     } catch { /* Original playback remains available when metadata is unavailable. */ }
     try { const data = await api('/api/play/skips?id=' + encodeURIComponent(p.id) + '&duration=' + encodeURIComponent(video.duration || p.duration), undefined, undefined, p.connection); if (S.playback === p) { p.skips = data; if (playerOptions.active()) playerOptions.render(); } } catch {}
+  }
+  async function recoverMovieAudio(p, options) {
+    const isCurrent = () => S.playback === p && S.route === 'player' && p.kind === 'original' && !playerOptions.active();
+    if (!p.audioCompatibility || !isCurrent() || video.audioTracks?.length !== 0 || movieMedia.switching()) return;
+    const quality = options.qualities?.find(q => q.id === 'audio-compatible');
+    if (!quality) return;
+    toast('电视无法解码原音轨，正在准备兼容音轨…');
+    try {
+      const candidate = await api('/api/play/quality', { id: p.id, qualityId: quality.id, action: 'prepare' }, undefined, p.connection);
+      await movieMedia.switchSource(candidate, {
+        id: p.id, playback: p, isCurrent, verify: () => video.audioTracks?.length > 0,
+      });
+      if (S.playback === p && p.kind === 'hls') toast('已启用兼容音轨');
+    } catch (error) {
+      if (error.name !== 'AbortError' && isCurrent()) toast('兼容播放未准备好，可在画质菜单中重试');
+    }
   }
   function meta(item) { return [item.score > 0 ? Number(item.score).toFixed(1) : '', item.year || '', (item.genres || []).map(g => genres[g]).filter(Boolean).slice(0, 3).join(' · '), item.duration ? `${Math.floor(item.duration / 60)} 分钟` : ''].filter(Boolean).map(esc).join('　/　'); }
   function card(item, wide = false) {
@@ -218,8 +239,13 @@
   function errorScreen(error, retry = home) { root.innerHTML = `<div class="error-screen"><h1>暂时无法连接</h1><p>${esc(error.message)}</p><div class="actions"><button class="action" data-primary id="retry">重试</button><button class="action secondary" data-route="settings">连接设置</button></div></div>`; $('#retry').onclick = retry; bind(); firstFocus(); }
   function renderLibrary() {
     const title = S.libraryTitle || labels[S.route] || '全部影片';
-    root.innerHTML = `${header(title)}${nav(S.route)}<main class="screen library-screen"><div class="toolbar"><button data-route="movies" class="${S.route === 'movies' ? 'selected' : ''}">电影</button><button data-route="tv" class="${S.route === 'tv' ? 'selected' : ''}">电视剧</button><span>${S.total || 0} 部</span><select id="sort" aria-label="排序"><option value="2">按添加时间 ↓</option><option value="1">按名称</option><option value="4">按评分</option></select></div><div class="grid ${S.route === 'history' ? 'history-grid' : ''}">${S.list.map(i => card(i, S.route === 'history')).join('')}</div>${!S.list.length ? '<div class="empty">暂无影片</div>' : ''}${S.last ? '' : '<div class="more-row"><button class="action secondary" id="load-more">加载更多</button></div>'}</main>`;
-    $('#sort').value = S.sort || '2'; $('#sort').onchange = () => { S.sort = $('#sort').value; loadLibrary(true); };
+    const sortable = S.route === 'movies' || S.route === 'tv' || Boolean(S.libraryId);
+    root.innerHTML = `${header(title)}${nav(S.route)}<main class="screen library-screen"><div class="toolbar"><button data-route="movies" class="${S.route === 'movies' ? 'selected' : ''}">电影</button><button data-route="tv" class="${S.route === 'tv' ? 'selected' : ''}">电视剧</button><span>${S.total || 0} 部</span>${sortable ? '<select id="sort" aria-label="排序"><option value="2">按添加时间 ↓</option><option value="1">按名称 A–Z</option><option value="3">按上映时间 ↓</option><option value="4">按评分 ↓</option></select>' : ''}</div><div class="grid ${S.route === 'history' ? 'history-grid' : ''}">${S.list.map(i => card(i, S.route === 'history')).join('')}</div>${!S.list.length ? '<div class="empty">暂无影片</div>' : ''}${S.last ? '' : '<div class="more-row"><button class="action secondary" id="load-more">加载更多</button></div>'}</main>`;
+    const sort = $('#sort');
+    if (sort) {
+      sort.value = S.sort || '2';
+      sort.onchange = () => { S.sort = sort.value; store.set('librarySort', S.sort); loadLibrary(true); };
+    }
     if ($('#load-more')) $('#load-more').onclick = () => loadLibrary(false);
     bind();
   }
@@ -382,7 +408,10 @@
       const tracks = Array.from(video.textTracks || []);
       content = `<h2>字幕</h2><button data-subtitle="-1">关闭字幕</button>${tracks.map((t, n) => `<button data-subtitle="${n}">${esc(t.label || t.language || '字幕 ' + (n + 1))}</button>`).join('')}${tracks.length ? '' : '<p>电视未返回字幕轨道。此版本暂不能提取片源内嵌的 ASS / PGS 字幕。</p>'}`;
     }
-    if (kind === 'info') content = `<h2>播放信息</h2><p>${esc(S.playback.title)}<br>当前播放：${esc(S.playback.quality?.label || '原画')} · ${video.videoWidth || '—'} × ${video.videoHeight || '—'}${S.playback.kind === 'hls' ? ' · NAS 转码' : ''}</p><p>原文件：${esc(S.playback.technical?.container?.toUpperCase() || '')} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}<br>${esc(S.playback.technical?.video_info?.resolution || '')} · ${esc(S.playback.technical?.video_info?.bitrate || '')}<br>${esc(S.detail.item.imageQuality || '')} · ${esc(S.detail.item.audioQuality || '')}</p>`;
+    if (kind === 'info') {
+      const conversion = conversionLabel(S.playback);
+      content = `<h2>播放信息</h2><p>${esc(S.playback.title)}<br>当前播放：${esc(S.playback.quality?.label || '原画')} · ${video.videoWidth || '—'} × ${video.videoHeight || '—'}${conversion ? ' · ' + conversion : ''}</p><p>原文件：${esc(S.playback.technical?.container?.toUpperCase() || '')} · ${esc(S.playback.technical?.video_info?.codec?.toUpperCase() || '')}<br>${esc(S.playback.technical?.video_info?.resolution || '')} · ${esc(S.playback.technical?.video_info?.bitrate || '')}<br>${esc(S.detail.item.imageQuality || '')} · ${esc(S.detail.item.audioQuality || '')}</p>`;
+    }
     $('#player-dialog').innerHTML = `<section class="player-dialog">${content}<button id="close-dialog">返回</button></section>`;
     $('#close-dialog').onclick = dialogBack;
     root.querySelectorAll('[data-subdialog]').forEach(b => b.onclick = () => playerDialog(b.dataset.subdialog));
@@ -461,6 +490,8 @@
     if (name === 'photos') { beginView('photos'); return photoGallery.open(); }
     if (name === 'home') return home(); if (name === 'settings') return setup(); if (name === 'search') return search();
     if (name === 'folders') { beginView('folders'); renderFolders(); return; }
+    const savedSort = store.get('librarySort');
+    S.sort = ['1', '2', '3', '4'].includes(savedSort) ? savedSort : '2';
     beginView(name); loadLibrary(true);
   }
   function bind() {

@@ -213,6 +213,13 @@ async page => {
     await page.keyboard.press('Enter'); await page.waitForSelector('.select-overlay'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter'); await page.waitForSelector('.grid');
     check(await page.locator('#sort').inputValue() === '1', 'Confirmed option was not applied');
     await page.locator('#sort').click(); await page.waitForSelector('.select-overlay'); await page.locator('[data-select-close]').click();
+    await page.locator('#sort').focus(); await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: '按上映时间 ↓' }).click(); await page.waitForSelector('.grid');
+    await page.locator('#load-more').click(); await page.waitForSelector('[data-item="61"]');
+    const calls = control.calls.filter(c => c.path === '/api/library').slice(-2).map(c => new URLSearchParams(c.query));
+    check(calls.every(c => c.get('sort') === '3') && calls[1].get('page') === '2', 'Release order was not applied to both pages');
+    await page.reload(); await page.locator('[data-route="movies"]').click(); await page.waitForSelector('#sort');
+    check(await page.locator('#sort').inputValue() === '3', 'Release order was not restored after restart');
   });
   await run('影片加载中暂停不会被误报成播放故障', async () => {
     await detail(); await page.evaluate(() => { window.__holdMetadata = true; window.__deferMediaPlay = true; });

@@ -43,6 +43,10 @@ const original = movies.register(id, owner, nas, play, {
 
 画质不能凭电视型号或客户端枚举自行构造。服务只接受当前 NAS `describe().qualities` 的 ID，原画始终存在并默认选中。每个播放只有一份 metadata session，外挂字幕和在线搜索结果的能力 ID 属于这份 session，避免重新 describe 后 ID 失效。
 
+原画兼容使用播放时处理。对于包含 EAC3 备用音轨的 Dolby Vision MP4，网关在内存里重组 MP4 索引，保留原视频和 EAC3 音轨，所有媒体数据和 Range 位置沿用原文件。原画起播和拖动都走同一个只读 NAS 文件接口。
+
+可选的 `tools/nas-movie-audio.py` 用于只有不兼容音轨的 Matroska 片源。它读取预先配置的单个文件和关键帧索引，在收到电视请求时生成分段，把视频原样复制到 HLS，只把音频转为 EAC3。配置指定源文件 `source` 及其 `device`、`inode`、`size`，以及 `listen`、`port`、`peer` 和 32 字节十六进制 `key`。电视应用通过本机服务的 `configureMovieAudio` 设置对应的 `path`、`host`、`port`、`key`、`size`，以及源文件前 64 KiB 的 SHA-256（`headerHash`），由服务写入私有状态目录。同目录内改名后，NAS 用文件标识、电视用文件头指纹继续匹配。匹配的影片会出现「原画 · 兼容音轨」，电视未识别到原音轨时可自动切换。两个路径都直接读取原电影，兼容输出只用于本次播放。
+
 ### 画质候选事务
 
 ```js
