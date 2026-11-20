@@ -14,12 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        node-version: ['20.12.2', '24']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: npm
       # Private-state tests intentionally reject path aliases. Windows runners
       # can expose an 8.3 TEMP path even when the directory itself is ordinary.
@@ -29,6 +30,12 @@ jobs:
         run: |
           node -e "const fs=require('node:fs');const p=fs.realpathSync(process.env.RUNNER_TEMP);console.log('TEMP='+p);console.log('TMP='+p)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: npm ci --no-audit --no-fund
+      - run: node tools/audit-native-worker.mjs
+      - run: node tools/audit-audio-wasm.mjs
+      - if: matrix.node-version == '24'
+        run: |
+          npm run build:assets
+          git diff --exit-code -- app/
       - run: npm test
 
   package-tv:

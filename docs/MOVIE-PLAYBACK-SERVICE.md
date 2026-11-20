@@ -45,7 +45,7 @@ const original = movies.register(id, owner, nas, play, {
 
 原画兼容使用播放时处理。对于包含 EAC3 备用音轨的 Dolby Vision MP4，网关在内存里重组 MP4 索引，保留原视频和 EAC3 音轨，所有媒体数据和 Range 位置沿用原文件。原画起播和拖动都走同一个只读 NAS 文件接口。
 
-可选的 `tools/nas-movie-audio.py` 用于只有不兼容音轨的 Matroska 片源。它读取预先配置的单个文件和关键帧索引，在收到电视请求时生成分段，把视频原样复制到 HLS，只把音频转为 EAC3。配置指定源文件 `source` 及其 `device`、`inode`、`size`，以及 `listen`、`port`、`peer` 和 32 字节十六进制 `key`。电视应用通过本机服务的 `configureMovieAudio` 设置对应的 `path`、`host`、`port`、`key`、`size`，以及源文件前 64 KiB 的 SHA-256（`headerHash`），由服务写入私有状态目录。同目录内改名后，NAS 用文件标识、电视用文件头指纹继续匹配。匹配的影片会出现「原画 · 兼容音轨」，电视未识别到原音轨时可自动切换。两个路径都直接读取原电影，兼容输出只用于本次播放。
+对于仅有 DTS / TrueHD / FLAC / PCM 等不兼容音轨的 Matroska 影片或剧集，主服务现已直接内置基于纯 LGPL-2.1 FFmpeg 7.1.1 WASM 与 HTTP `Range` 切片的 `mkvAudioCompatSession`（[lib/movie-mkv-compat.mjs](../lib/movie-mkv-compat.mjs) + [lib/audio-compat-wasm.mjs](../lib/audio-compat-wasm.mjs)）：通过 `Range` 只读读取原文件的 EBML Header、`Info`、`Tracks` 与 `Cues` 关键帧字节区间，播放或快进时按需拉取单个 ~5 秒 GOP 并在电视端将视频包原样复制到 MPEG-TS、仅把目标音轨转为 EAC3（最高 5.1 声道）。内置转换无需部署 NAS 容器或配置片源（原有的可选 `tools/nas-movie-audio.py` 仅作为人工高级覆盖钩子保留）。两个路径均以只读方式访问 NAS 原片，不写磁盘副本。
 
 ### 画质候选事务
 

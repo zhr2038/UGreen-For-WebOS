@@ -43,9 +43,9 @@ try:
     sudo('install -d -m 0755 ' + shlex.quote(target))
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode='w') as archive:
-        for name in ['server.mjs', 'lib', 'app', 'compose.yaml', 'Dockerfile', '.dockerignore', 'package.json', 'package-lock.json']:
+        for name in ['server.mjs', 'lib', 'app', 'app-src', 'third-party', 'assets/audio-compat', 'compose.yaml', 'Dockerfile', '.dockerignore', 'package.json', 'package-lock.json']:
             archive.add(root / name, arcname=name)
-        for name in ['configure-nas.mjs', 'pair-code.mjs']:
+        for name in ['configure-nas.mjs', 'pair-code.mjs', 'build-assets.mjs']:
             archive.add(root / 'tools' / name, arcname='tools/' + name)
         archive.add(root / '.local/bridge/nas.json', arcname='state/nas.json')
     sudo('tar -xf - -C ' + shlex.quote(target), buffer.getvalue())

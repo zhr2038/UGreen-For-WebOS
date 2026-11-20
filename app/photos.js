@@ -33,7 +33,7 @@
     const duration = value => `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}`;
     const bytes = value => value > 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GB` : value > 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : value ? `${Math.ceil(value / 1024)} KB` : '';
     const categoryNames = { figure: '人物', city: '地点', object: '事物', pet: '宠物', custom: '自定义分类' };
-    const thumb = (path, name) => path ? `<img src="${esc(asset(path))}" alt="${esc(name)}" loading="lazy">` : '<span class="photo-placeholder">▧</span>';
+    const thumb = (path, name) => path ? `<img data-art-source="${esc(asset(path))}" alt="${esc(name)}">` : '<span class="photo-placeholder">▧</span>';
     const hasSoftwareMusic = () => typeof window.createPhotoMusic === 'function';
     function stopMusic() {
       if (softwareMusic) {
@@ -132,6 +132,7 @@
       return '';
     }
     function rememberUhdFailure(p, error) {
+      if (error?.code === 'CACHE_FULL') return;
       G.uhdFailures.add(uhdKey(p)); while (G.uhdFailures.size > 64) G.uhdFailures.delete(G.uhdFailures.values().next().value);
       if (error.code === 'IMAGE_DECODE_UNSUPPORTED') G.uhdBlockedFormats.add(p.format);
       if (['ENCODER_UNAVAILABLE', 'ENCODER_UNSUPPORTED', 'CODEC_UNSUPPORTED'].includes(error.code)) G.uhdUnavailable = true;
@@ -210,7 +211,7 @@
       } catch (error) {
         if (current()) {
           rememberUhdFailure(p, error); stopUhd();
-          const reasons = { IMAGE_DECODE_UNSUPPORTED: '此原图格式暂不能生成 4K 视频，可使用照片预览或系统查看', HEIF_TOO_LARGE: '原图尺寸超过 4K 处理上限，继续显示照片', SOURCE_TOO_LARGE: '原图文件或尺寸超过 4K 处理上限，继续显示照片', HEIF_MEMORY_LIMIT: '原图解码内存不足，继续显示照片', HEIF_TIMEOUT: '原图解码超时，继续显示照片', ORIGINAL_TIMEOUT: '原图读取超时，继续显示照片', ORIGINAL_READ_FAILED: '原图读取失败，继续显示照片', ENCODER_UNAVAILABLE: '当前电视不支持 4K 照片编码，继续显示照片', ENCODER_UNSUPPORTED: '当前电视不支持此 4K 编码配置，继续显示照片', ENCODE_TIMEOUT: '4K 编码超时，继续显示照片', PIPELINE_TIMEOUT: '原图处理超时，继续显示照片' };
+          const reasons = { IMAGE_DECODE_UNSUPPORTED: '此原图格式暂不能生成 4K 视频，已保留照片预览', HEIF_TOO_LARGE: '原图尺寸超过 4K 处理上限，继续显示照片', SOURCE_TOO_LARGE: '原图文件或尺寸超过 4K 处理上限，继续显示照片', HEIF_MEMORY_LIMIT: '原图解码内存不足，继续显示照片', HEIF_TIMEOUT: '原图解码超时，继续显示照片', ORIGINAL_TIMEOUT: '原图读取超时，继续显示照片', ORIGINAL_READ_FAILED: '原图读取失败，继续显示照片', ENCODER_UNAVAILABLE: '当前电视不支持 4K 照片编码，继续显示照片', ENCODER_UNSUPPORTED: '当前电视不支持此 4K 编码配置，继续显示照片', ENCODE_TIMEOUT: '4K 编码超时，继续显示照片', PIPELINE_TIMEOUT: '原图处理超时，继续显示照片' };
           const text = reasons[error.code] || '4K 视频准备失败，已恢复照片显示';
           if (!automatic) { uhdStatus(text); toast(text); schedule(); }
           syncMusic();
@@ -223,7 +224,7 @@
       cancelVideoCandidate(false);
       if (G.videoSession) { const { id, connection } = G.videoSession; G.videoSession = null; api('/api/photos/video/close', { id }, undefined, connection).catch(() => {}); }
       const clip = $('#photo-clip');
-      if (clip) { clip.onplay = clip.onpause = clip.onplaying = clip.onwaiting = clip.onstalled = clip.ontimeupdate = clip.onloadeddata = clip.onended = clip.onerror = null; clip.pause(); clip.removeAttribute('src'); clip.load(); }
+      if (clip) { clip.onloadedmetadata = clip.onplay = clip.onpause = clip.onplaying = clip.onwaiting = clip.onstalled = clip.ontimeupdate = clip.onloadeddata = clip.onended = clip.onerror = null; clip.pause(); clip.removeAttribute('src'); clip.load(); }
       if (preload) { preload.onload = preload.onerror = null; preload.src = ''; preload = null; }
     }
     function leave() { G.active = false; G.playing = false; G.viewer = false; G.infoOpen = false; G.previewOverride = null; ++G.generation; ++musicGeneration; G.musicLoading = null; stopMedia(); stopMusic(); softwareMusic?.dispose().catch(() => {}); softwareMusic = null; heifDecoder?.dispose?.(); heifDecoder = null; }
@@ -400,6 +401,7 @@
       setSlideshow(false); G.infoOpen = true; G.dialogType = 'settings'; G.resumeAfterDialog = resume; G.dialogResumeClip = resumeClip; G.dialogReturnFocus = 'photo-settings';
       const dialog = document.createElement('section'); dialog.id = 'photo-info-dialog'; dialog.className = 'photo-info-dialog'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', '幻灯片设置');
       dialog.innerHTML = `<div class="photo-info-panel"><h2>幻灯片设置</h2><div id="photo-info-content" class="photo-settings-list">${['interval', 'mode', 'display'].map(key => `<button data-photo-setting="${key}">${esc(settingsLabel(key))}</button>`).join('')}<button id="photo-music-setting">${esc(settingsLabel('music'))}</button><div id="photo-music-choices"></div><p>上下选择 · 左右调整 · 音乐只在图片幻灯片时播放</p></div><button id="photo-info-close">完成</button></div>`;
+      dialog.onclick = e => { if (e.target === dialog) closeInfo(); };
       root.appendChild(dialog); dialog.querySelectorAll('[data-photo-setting]').forEach(button => button.onclick = () => changeSetting(button.dataset.photoSetting));
       $('#photo-music-setting').onclick = chooseMusic; $('#photo-info-close').onclick = closeInfo; focus(dialog.querySelector('button'));
     }
@@ -407,7 +409,7 @@
       if (G.infoOpen || !G.viewer || G.loading) return;
       setSlideshow(false); G.infoOpen = true; G.dialogType = 'info'; G.resumeAfterDialog = false; G.dialogReturnFocus = 'photo-info'; const imageGeneration = G.imageGeneration, p = G.data.items[G.index];
       const dialog = document.createElement('section'); dialog.id = 'photo-info-dialog'; dialog.className = 'photo-info-dialog'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', '照片信息');
-      dialog.innerHTML = '<div class="photo-info-panel"><h2>照片信息</h2><div id="photo-info-content">正在读取…</div><button id="photo-info-close">关闭</button></div>'; root.appendChild(dialog); $('#photo-info-close').onclick = closeInfo; focus($('#photo-info-close'));
+      dialog.innerHTML = '<div class="photo-info-panel"><h2>照片信息</h2><div id="photo-info-content">正在读取…</div><button id="photo-info-close">关闭</button></div>'; dialog.onclick = e => { if (e.target === dialog) closeInfo(); }; root.appendChild(dialog); $('#photo-info-close').onclick = closeInfo; focus($('#photo-info-close'));
       try {
         const data = p.info ? await api(p.info) : { item: p, metadata: {} };
         if (!G.active || !G.viewer || !G.infoOpen || G.dialogType !== 'info' || $('#photo-info-dialog') !== dialog || imageGeneration !== G.imageGeneration) return;
@@ -422,7 +424,7 @@
       const generation = G.imageGeneration, resume = G.playing, resumeClip = !clip.paused, connection = G.videoSession?.connection || captureConnection();
       setSlideshow(false); G.infoOpen = true; G.dialogType = 'quality'; G.resumeAfterDialog = resume; G.dialogResumeClip = resumeClip; G.dialogReturnFocus = 'photo-video-quality';
       const dialog = document.createElement('section'); dialog.id = 'photo-info-dialog'; dialog.className = 'photo-info-dialog'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', '相册视频画质');
-      dialog.innerHTML = '<div class="photo-info-panel"><h2>视频画质</h2><div id="photo-info-content" class="photo-settings-list">正在读取 NAS 可用画质…</div><button id="photo-info-close">返回</button></div>'; root.appendChild(dialog); $('#photo-info-close').onclick = closeInfo; focus($('#photo-info-close'));
+      dialog.innerHTML = '<div class="photo-info-panel"><h2>视频画质</h2><div id="photo-info-content" class="photo-settings-list">正在读取 NAS 可用画质…</div><button id="photo-info-close">返回</button></div>'; dialog.onclick = e => { if (e.target === dialog) closeInfo(); }; root.appendChild(dialog); $('#photo-info-close').onclick = closeInfo; focus($('#photo-info-close'));
       const current = () => G.active && G.viewer && G.infoOpen && G.dialogType === 'quality' && $('#photo-info-dialog') === dialog && generation === G.imageGeneration;
       try {
         if (!G.videoSession) {
@@ -482,7 +484,7 @@
             pending.restore = rollback;
             clip.onerror = null; clip.addEventListener('error', failed, { once: true }); clip.addEventListener('loadeddata', accepted, { once: true }); clip.addEventListener('loadedmetadata', restorePosition, { once: true });
             clip.pause(); clip.removeAttribute('src'); clip.load();
-            clip.src = asset(result.url); clip.load(); frameTimer = setTimeout(failed, 20000); closeInfo({ keepCandidate: true });
+            clip.preload = 'auto'; clip.src = asset(result.url); clip.load(); frameTimer = setTimeout(failed, 20000); closeInfo({ keepCandidate: true });
             // Preload metadata alone need not decode a first frame. Keep one
             // video element, and begin it only if it was playing beforehand.
           } catch (error) { if (G.videoPending === pending) cancelVideoCandidate(); if (current()) { toast(error.message); dialog.querySelectorAll('[data-photo-quality]').forEach(item => item.disabled = false); focus(button); } }
@@ -490,6 +492,23 @@
         });
         focus(dialog.querySelector('[data-photo-quality]') || $('#photo-info-close'));
       } catch (error) { if (current()) $('#photo-info-content').textContent = error.message; }
+    }
+    function updatePhotoVideoProgress() {
+      const clip = $('#photo-clip'), seek = $('#photo-seek'), fill = $('#photo-seek-fill'), timeEl = $('#photo-video-time');
+      if (!clip || !seek) return;
+      const total = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
+      const now = Number.isFinite(clip.currentTime) ? clip.currentTime : 0;
+      if (fill) fill.style.width = (total ? Math.min(100, now / total * 100) : 0) + '%';
+      if (timeEl) timeEl.textContent = `${duration(now)} / ${duration(total)}`;
+      seek.setAttribute('aria-valuemax', total);
+      seek.setAttribute('aria-valuenow', Math.floor(now));
+    }
+    function seekPhotoVideo(delta) {
+      const clip = $('#photo-clip');
+      if (!clip || clip.readyState < 1 || !Number.isFinite(clip.duration) || clip.duration <= 0) { toast('视频尚未准备好'); return; }
+      try { clip.currentTime = Math.max(0, Math.min(Math.max(0, clip.duration - .1), (Number.isFinite(clip.currentTime) ? clip.currentTime : 0) + delta)); updatePhotoVideoProgress(); }
+      catch { toast('此视频暂时无法跳转'); }
+      showControls();
     }
     function openViewer(index, playing = false, source = 'preview') {
       stopMedia(); G.viewer = true; G.index = index; G.playing = playing; G.rotation = 0; G.zoom = false; G.loading = false; G.ready = false; G.infoOpen = false; G.source = source; G.uhdSuspended = false;
@@ -499,7 +518,9 @@
       const automaticGif = !isVideo && source === 'preview' && p.format === 'gif' && Number(p.size) > 0 && Number(p.width) > 0 && Number(p.height) > 0 && !uhdSourceProblem(p);
       const isOriginal = !isVideo && (source === 'original' || automaticGif) && p.original;
       const counter = G.data.totalKnown === false ? `本页 ${index + 1} / ${G.data.items.length}` : `${G.offset + index + 1} / ${Number(G.data.total).toLocaleString()}`;
-      root.innerHTML = `<section class="photo-viewer" aria-label="全屏查看"><div class="photo-canvas">${isVideo ? '<video id="photo-clip" playsinline preload="metadata"></video>' : '<img id="photo-full" alt="">'}<div id="photo-view-loading"><span class="spinner"></span></div></div><div class="photo-view-top photo-overlay"><button id="photo-close">‹ 返回</button><div><b>${esc(p.name)}</b><span>${esc(date(p.date))}${p.width && p.height ? ` · ${p.width} × ${p.height}` : ''}${isOriginal ? ' · 原图文件' : source === 'live' ? ' · 实况播放' : ''}</span></div><span class="photo-counter">${counter}</span></div><div id="photo-view-error" role="status"></div><div class="photo-view-bottom photo-overlay"><div class="photo-view-buttons"><button id="photo-previous">‹ 上一项</button>${isVideo ? '<button id="photo-video-pause">暂停视频</button>' : ''}<button id="photo-slideshow">${playing ? '暂停幻灯片' : '播放幻灯片'}</button><button id="photo-interval">间隔 ${G.interval} 秒</button>${!isVideo ? '<button id="photo-rotate">旋转</button><button id="photo-zoom">放大</button>' : ''}${!isVideo && p.original ? `<button id="photo-original">${isOriginal ? '预览图' : '原图'}</button>` : ''}${p.motion ? `<button id="photo-motion">${source === 'live' ? '静态照片' : '播放实况'}</button>` : ''}<button id="photo-info">信息</button>${!isVideo && p.original && nativePhotoViewer ? '<button id="photo-native">系统查看</button>' : ''}<button id="photo-next">下一项 ›</button></div><p>左右切换 · 确定显示操作 · 返回照片列表</p></div></section>`;
+      const videoSeek = isVideo && source !== 'live' ? '<div class="photo-video-progress"><div class="seek" id="photo-seek" tabindex="0" role="slider" aria-label="视频进度" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><i id="photo-seek-fill"></i></div><span id="photo-video-time">0:00 / 0:00</span></div>' : '';
+      root.innerHTML = `<section class="photo-viewer" aria-label="全屏查看"><div class="photo-canvas">${isVideo ? '<video id="photo-clip" playsinline preload="metadata"></video>' : '<img id="photo-full" alt="">'}<div id="photo-view-loading"><span class="spinner"></span></div></div><div class="photo-view-top photo-overlay"><button id="photo-close">‹ 返回</button><div><b>${esc(p.name)}</b><span>${esc(date(p.date))}${p.width && p.height ? ` · ${p.width} × ${p.height}` : ''}${isOriginal ? ' · 原图文件' : source === 'live' ? ' · 实况播放' : ''}</span></div><span class="photo-counter">${counter}</span></div><div id="photo-view-error" role="status"></div><div class="photo-view-bottom photo-overlay">${videoSeek}<div class="photo-view-buttons"><button id="photo-previous">‹ 上一项</button>${isVideo ? '<button id="photo-video-pause">暂停视频</button>' : ''}<button id="photo-slideshow">${playing ? '暂停幻灯片' : '播放幻灯片'}</button><button id="photo-interval">间隔 ${G.interval} 秒</button>${!isVideo ? '<button id="photo-rotate">旋转</button><button id="photo-zoom">放大</button>' : ''}${!isVideo && p.original ? `<button id="photo-original">${isOriginal ? '预览图' : '原图'}</button>` : ''}${p.motion ? `<button id="photo-motion">${source === 'live' ? '静态照片' : '播放实况'}</button>` : ''}<button id="photo-info">信息</button>${!isVideo && p.original && nativePhotoViewer ? '<button id="photo-native">系统查看</button>' : ''}<button id="photo-next">下一项 ›</button></div><p>${isVideo && source !== 'live' ? '上键调整进度 · 左右选择 · 确定显示操作 · 返回列表' : '左右切换 · 确定显示操作 · 返回照片列表'}</p></div></section>`;
+      $('.photo-canvas').onclick = () => { if (!G.viewer || G.infoOpen) return; if (G.controls) { clearTimeout(hideTimer); G.controls = false; $('.photo-viewer')?.classList.add('clean'); } else showControls(); };
       $('#photo-close').onclick = closeViewer; $('#photo-previous').onclick = () => step(-1); $('#photo-next').onclick = () => step(1);
       $('#photo-slideshow').onclick = toggleSlideshow;
       $('#photo-info').onclick = openInfo;
@@ -557,11 +578,21 @@
         $('#photo-video-pause').onclick = () => { if (clip.paused) clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); else clip.pause(); showControls(); };
         clip.onplay = () => { if (G.active && imageGeneration === G.imageGeneration && $('#photo-video-pause')) $('#photo-video-pause').textContent = '暂停视频'; };
         clip.onpause = () => { if (G.active && imageGeneration === G.imageGeneration && $('#photo-video-pause')) $('#photo-video-pause').textContent = '播放视频'; };
-        const loaded = () => { if (G.active && imageGeneration === G.imageGeneration && clip.readyState >= 2 && !clip.error) { G.ready = true; $('#photo-view-loading').style.display = 'none'; $('#photo-view-error').replaceChildren(); } };
+        const loaded = () => { if (G.active && imageGeneration === G.imageGeneration && clip.readyState >= 2 && !clip.error) { G.ready = true; $('#photo-view-loading').style.display = 'none'; $('#photo-view-error').replaceChildren(); updatePhotoVideoProgress(); } };
         const watch = () => { clearTimeout(G.videoWatchdog); G.videoWatchdog = setTimeout(() => { if (G.active && G.viewer && !G.infoOpen && imageGeneration === G.imageGeneration && !document.hidden && !clip.paused && !clip.ended) failure('timeout'); }, 20000); };
+        clip.onloadedmetadata = updatePhotoVideoProgress;
         clip.onloadeddata = loaded; clip.onplaying = () => { clearTimeout(G.videoWatchdog); loaded(); };
-        clip.onwaiting = clip.onstalled = watch; clip.ontimeupdate = () => { if (clip.currentTime > 0) { clearTimeout(G.videoWatchdog); loaded(); } };
+        clip.onwaiting = clip.onstalled = watch; clip.ontimeupdate = () => { if (clip.currentTime > 0) { clearTimeout(G.videoWatchdog); loaded(); } updatePhotoVideoProgress(); };
         clip.onended = () => { if (!G.active || imageGeneration !== G.imageGeneration) return; if (G.playing) step(1, true); else if (source === 'live') openViewer(index); else showControls(); }; clip.onerror = failure;
+        if ($('#photo-seek')) {
+          $('#photo-seek').onclick = e => {
+            if (!Number.isFinite(clip.duration) || clip.duration <= 0) return;
+            const rect = $('#photo-seek').getBoundingClientRect();
+            const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+            try { clip.currentTime = Math.min(Math.max(0, clip.duration - .1), ratio * clip.duration); updatePhotoVideoProgress(); } catch {}
+            showControls();
+          };
+        }
         const stream = source === 'live' ? p.motion : p.stream;
         if (stream) { watch(); clip.src = asset(stream); clip.play().catch(err => { if (err.name !== 'AbortError') failure(); }); } else failure();
       } else {
@@ -617,8 +648,12 @@
       exit();
     }
     function key(e) {
-      if (!G.viewer) return false;
       const code = e.keyCode;
+      if (!G.viewer) {
+        if (code === 33 && $('#photo-prev-page')) { e.preventDefault(); $('#photo-prev-page').click(); return true; }
+        if (code === 34 && $('#photo-next-page')) { e.preventDefault(); $('#photo-next-page').click(); return true; }
+        return false;
+      }
       if (G.infoOpen) {
         if ([37, 38, 39, 40].includes(code)) {
           e.preventDefault();
@@ -631,12 +666,20 @@
         }
         return false;
       }
+      const active = document.activeElement;
+      if ([412, 417].includes(code) && $('#photo-seek')) { e.preventDefault(); seekPhotoVideo(code === 417 ? 10 : -10); return true; }
+      if (active?.id === 'photo-seek') {
+        if (code === 37 || code === 39) { e.preventDefault(); seekPhotoVideo(code === 39 ? 10 : -10); return true; }
+        if (code === 40) { e.preventDefault(); showControls(); focus($('#photo-video-pause') || $('#photo-slideshow')); return true; }
+        if (code === 13) { e.preventDefault(); $('#photo-video-pause')?.click(); return true; }
+      }
+      if (code === 38 && $('.photo-view-buttons')?.contains(active) && $('#photo-seek')) { e.preventDefault(); showControls(); focus($('#photo-seek')); return true; }
       if ([37, 39].includes(code)) {
-        // Down opens the toolbar; left/right then navigate its buttons.
-        if (!G.controls || !$('.photo-view-buttons')?.contains(document.activeElement)) { e.preventDefault(); step(code === 39 ? 1 : -1); return true; }
+        // Down opens the toolbar; left/right then navigate its buttons or error actions.
+        if (!$('#photo-view-error')?.contains(active) && (!G.controls || (!$('.photo-view-buttons')?.contains(active) && active?.id !== 'photo-seek'))) { e.preventDefault(); step(code === 39 ? 1 : -1); return true; }
       }
       if (code === 13 && !G.controls) { e.preventDefault(); showControls(); focus($('#photo-slideshow')); return true; }
-      if (code === 40 && !$('.photo-view-buttons')?.contains(document.activeElement)) { e.preventDefault(); showControls(); focus($('#photo-slideshow')); return true; }
+      if (code === 40 && !$('.photo-view-buttons')?.contains(active) && !$('#photo-view-error')?.contains(active) && active?.id !== 'photo-seek') { e.preventDefault(); showControls(); focus($('#photo-seek') || $('#photo-slideshow')); return true; }
       if (code === 415 || code === 19) { e.preventDefault(); const clip = $('#photo-clip'); if (clip) { if (clip.paused === (code === 415)) $('#photo-video-pause').click(); } else setSlideshow(code === 415); return true; }
       if ([179, 10252].includes(code) || e.code === 'Space') { e.preventDefault(); if (!e.repeat) { if ($('#photo-clip')) $('#photo-video-pause').click(); else toggleSlideshow(); } return true; }
       if (code === 413) { e.preventDefault(); closeViewer(); return true; }

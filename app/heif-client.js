@@ -12,12 +12,22 @@
   const aborted = () => new DOMException('HEIF decoding cancelled','AbortError');
   const validPixels = (w,h,max) => Number.isSafeInteger(w)&&Number.isSafeInteger(h)&&w>0&&h>0&&w<=20000&&h<=20000&&w*h<=max;
   const url = value => {const result=new URL(value,base);if(!['file:','http:','https:'].includes(result.protocol)||result.username||result.password||result.hash)throw fail('HEIF_INVALID_OPTIONS');return result.href;};
+  const wasmCache = new WeakMap();
+  let cachedBase64 = null, cachedBytes = null;
   function wasmBytes(assets) {
     if(assets.wasmBinary?.byteLength>2*1024*1024)throw fail('HEIF_INVALID_OPTIONS');
     if(assets.wasmBinary instanceof ArrayBuffer)return assets.wasmBinary.slice(0);
     if(ArrayBuffer.isView(assets.wasmBinary))return assets.wasmBinary.buffer.slice(assets.wasmBinary.byteOffset,assets.wasmBinary.byteOffset+assets.wasmBinary.byteLength);
     if(typeof assets.wasmBase64==='string'){
-      if(assets.wasmBase64.length>2800000)throw fail('HEIF_INVALID_OPTIONS');const binary=atob(assets.wasmBase64),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer;
+      if(assets.wasmBase64.length>2800000)throw fail('HEIF_INVALID_OPTIONS');
+      let bytes = wasmCache.get(assets);
+      if(!bytes && cachedBase64 === assets.wasmBase64) bytes = cachedBytes;
+      if(!bytes){
+        const binary=atob(assets.wasmBase64); bytes=new Uint8Array(binary.length);
+        for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+        wasmCache.set(assets, bytes); cachedBase64 = assets.wasmBase64; cachedBytes = bytes;
+      }
+      return bytes.slice().buffer;
     }
     return undefined;
   }
@@ -83,6 +93,6 @@
         }).catch(error=>{if(current(job))finish(job,error?.name==='AbortError'?error:fail(Object.hasOwn(errors,error?.code)?error.code:'HEIF_DECODE_FAILED'));});
       });
     }
-    return{decode,cancel,dispose(){disposed=true;cancel();},stats:()=>({...counters,active:Boolean(active),disposed})};
+    return{decode,cancel,dispose(){disposed=true;cancel();cachedBase64=null;cachedBytes=null;try{delete window.CloudFrameHeifAssets;}catch{window.CloudFrameHeifAssets=undefined;}},stats:()=>({...counters,active:Boolean(active),disposed})};
   };
 })();

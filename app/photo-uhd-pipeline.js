@@ -137,7 +137,7 @@
         if (header) { checkPixels(header.width, header.height); if (!matches(header, expectedWidth, expectedHeight)) throw fail('SOURCE_DIMENSIONS_MISMATCH', '读取到的文件尺寸与原图不符，不能用预览图代替'); }
         if (header && globalThis.createImageBitmap) image = await bounded(createImageBitmap(original, { imageOrientation: 'from-image' }), { milliseconds: remaining(), signal, late: image => image.close() });
         else {
-          if (!globalThis.ImageDecoder?.isTypeSupported || !await bounded(ImageDecoder.isTypeSupported(mime), { milliseconds: remaining(), signal })) throw fail('IMAGE_DECODE_UNSUPPORTED', '浏览器不能解码这个原图格式，请保留系统查看器路径');
+          if (!globalThis.ImageDecoder?.isTypeSupported || !await bounded(ImageDecoder.isTypeSupported(mime), { milliseconds: remaining(), signal })) throw fail('IMAGE_DECODE_UNSUPPORTED', '浏览器不能解码这个原图格式，请使用预览图查看');
           decoder = new ImageDecoder({ data: bytes, type: mime, preferAnimation: false });
           image = (await bounded(decoder.decode({ frameIndex: 0, completeFramesOnly: true }), { milliseconds: remaining(), signal, late: result => result.image.close() })).image;
         }

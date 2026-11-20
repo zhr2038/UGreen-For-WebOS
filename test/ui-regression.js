@@ -55,8 +55,11 @@ async page => {
     if (url.pathname === '/api/direct/cancel') return response(route, { ok: true });
     if (url.host.startsWith('bad-nas.test')) return response(route, { error: '配对码错误' }, 401);
     if (url.pathname === '/api/home') return response(route, { connectionScope:state.connectionScope||'owner-A',accountScope: state.accountScope || 'account-A', name: '测试 NAS', connection: 'UGREENlink 中继', hero: [movie(1)], recent: [movie(1)], updates: [movie(2)], favorites: [movie(1)], libraries: [{ media_lib_set_id: 1, media_name: '电影', video_count: 120 }] });
-    if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; const items=state.overlapPages&&n===2?[movie(60),{...movie(60),libraryId:2},...Array.from({length:58},(_,j)=>movie(61+j))]:Array.from({ length: 60 }, (_, j) => movie(sortOffset + (n - 1) * 60 + j + 1));return response(route, { items, total: 120, last: n >= 2 }); }
-    if (url.pathname === '/api/detail') return response(route, { item: { ...movie(Number(url.searchParams.get('id'))), favorite: Boolean(state.detailFavorite) }, files: [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }], actors: [], technical: { container: 'mp4', video_info: { codec: 'h264', resolution: '1920x1080' }, audio_info: [] } });
+    if (url.pathname === '/api/library') { if (state.libraryFailOnce) { state.libraryFailOnce = false; return response(route, { error: 'offline' }, 503); } const n = Number(url.searchParams.get('page') || 1); if (n === 2 && state.pageGate) await state.pageGate.promise; const sortOffset = url.searchParams.get('sort') === '1' ? 1000 : 0; const items=state.overlapPages&&n===2?[movie(60),{...movie(60),libraryId:2},...Array.from({length:58},(_,j)=>movie(61+j))]:Array.from({ length: url.searchParams.get('kind') === 'history' ? 3 : 60 }, (_, j) => ({ ...movie(sortOffset + (n - 1) * 60 + j + 1), recentlyPlayedId: 500 + j }));return response(route, { items, total: url.searchParams.get('kind') === 'history' ? 3 : 120, last: url.searchParams.get('kind') === 'history' || n >= 2 }); }
+    if (url.pathname === '/api/filters') return response(route, { styles: [{ id: 1, name: '科幻' }], countries: [{ id: 2, name: '日本' }], years: [{ id: '2026', label: '2026 年' }], clarities: [{ id: '1', name: '4K' }] });
+    if (url.pathname === '/api/detail') { const id = Number(url.searchParams.get('id')); const multiSeasonFiles = state.multiSeason ? [{ index: 0, name: 'S1E1 · 4K', season: 1, episode: 1, multiVersion: true, versionLabel: '4K' }, { index: 1, name: 'S1E1 · 1080P', season: 1, episode: 1, multiVersion: true, versionLabel: '1080P' }, { index: 2, name: 'S1E2', season: 1, episode: 2 }, { index: 3, name: 'S2E1', season: 2, episode: 1 }] : [{ index: 0, name: '原画' }, { index: 1, name: '备用版本' }]; return response(route, { item: { ...movie(id), type: state.multiSeason ? 2 : 1, favorite: Boolean(state.detailFavorite), watched: Boolean(state.detailWatched) }, directors: [{ name: '测试导演' }], writers: [{ name: '测试编剧' }], actors: [{ name: '测试主演', role: '主角' }], files: multiSeasonFiles, technical: { container: 'mp4', file_name: 'sample.mkv', size: 2 * 1024 ** 3, video_info: { codec: 'hevc', resolution: '3840x2160' }, audio_info: [] } }); }
+    if (url.pathname === '/api/watched') return response(route, { ok: true, watched: Boolean(call.body.watched) });
+    if (url.pathname === '/api/history/delete') return response(route, { ok: true });
     if (url.pathname === '/api/favorite') { if (state.favoriteGate) await state.favoriteGate.promise; return response(route, { ok: true }); }
     if (url.pathname === '/api/play') { const gate = state.playGate; if (gate) await gate.promise; if (state.playError) return response(route, { error: '无法打开版本' }, 503); const id = 'play-' + (++state.playId); return response(route, { id, stream: '/media/' + id, fileIndex: call.body.fileIndex || 0, title: '测试播放', position: call.body.restart ? 0 : 120, duration: 3600, technical: {} }); }
     if (url.pathname === '/api/play/options') { if (state.optionsGate) await state.optionsGate.promise; return response(route, { qualities: [{ id: 'original', label: '原画' }, { id: '720p', label: '720P', resolution: '1280×720' }, ...(state.threeQualities ? [{ id: '480p', label: '480P', resolution: '720×480' }] : [])], audio: [], subtitles: [], selected: 'original', preferences: state.preferences || { mode: 'sort_list', rate: 1, fit: 'contain' } }); }
@@ -558,6 +561,49 @@ async page => {
     try{
       for(const[key,index]of[['ArrowRight',46],['ArrowLeft',45],['ArrowDown',45+columns],['ArrowUp',45]]){await page.evaluate(()=>window.__rectReads=0);await page.keyboard.press(key);const state=await page.evaluate(()=>({index:[...document.querySelectorAll('.grid .movie')].indexOf(document.activeElement),reads:__rectReads}));check(state.index===index,'Interior navigation changed row/column');check(state.reads<=8,'Interior navigation still scans whole grid geometry');}
     }finally{await page.evaluate(()=>{Element.prototype.getBoundingClientRect=__rectOriginal;delete window.__rectOriginal;delete window.__rectReads})}
+  });
+  await run('新增功能：海报墙多维筛选面板与排序方向切换发出正确查询', async () => {
+    await page.locator('[data-route="movies"]').click(); await page.waitForSelector('#filter-toggle');
+    await page.locator('#filter-toggle').click(); await page.waitForSelector('#filter-style option[value="1"]', { state: 'attached' }); await page.waitForSelector('#filter-clarity option[value="1"]', { state: 'attached' });
+    await page.locator('#filter-style').selectOption('1'); await page.waitForSelector('.grid .movie');
+    await page.locator('#filter-clarity').selectOption('1'); await page.waitForSelector('.grid .movie');
+    await page.locator('#filter-watched').selectOption('0'); await page.waitForSelector('.grid .movie');
+    await page.locator('#sort-order').click(); await page.waitForSelector('.grid .movie');
+    const q = new URLSearchParams(control.calls.filter(c => c.path === '/api/library').at(-1).query);
+    check(q.get('style') === '1' && q.get('clarity') === '1' && q.get('watched') === '0' && q.get('order') === '1', 'Filter or sort order query mismatch: ' + q.toString());
+  });
+  await run('新增功能：详情页已看切换、演职员分层及多季多版本选集跳转', async () => {
+    control.multiSeason = true; await detail(); await page.waitForSelector('#watched-toggle');
+    check((await page.locator('.credit-groups').textContent()).includes('测试导演'), 'Director credits missing');
+    await page.locator('#watched-toggle').click(); await page.waitForFunction(() => document.querySelector('#watched-toggle')?.textContent.includes('已看 ✓'));
+    check(control.calls.some(c => c.path === '/api/watched' && c.body.watched === true), 'Watched API not called');
+    await page.locator('[data-season="2"]').click(); await page.waitForSelector('[data-file="3"]');
+    await page.locator('[data-season="1"]').click(); await page.locator('[data-file="0"]').click(); await page.waitForSelector('#player-next');
+    await page.locator('#video').evaluate(v => { v.currentTime = 3599; v.dispatchEvent(new Event('ended')); });
+    await page.waitForFunction(() => new URL(document.querySelector('#video').src).pathname.endsWith('/play-2'));
+    check(control.calls.filter(c => c.path === '/api/play').at(-1).body.fileIndex === 2, 'Auto-next did not skip duplicate version of episode 1');
+  });
+  await run('新增功能：最近播放单条移除与二次确认清空记录', async () => {
+    await page.locator('.nav [data-route="history"]').click(); await page.waitForSelector('#history-manage');
+    await page.locator('#history-manage').click(); await page.waitForSelector('[data-history-delete]');
+    await page.locator('[data-history-delete]').first().click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-history-delete]').length === 2);
+    check(control.calls.some(c => c.path === '/api/history/delete' && c.body.id), 'Single history delete not called');
+    await page.locator('#history-clear').click();
+    check((await page.locator('#history-clear').textContent()).includes('确认'), 'Clear history skipped confirmation step');
+    await page.locator('#history-clear').click(); await page.waitForSelector('.empty');
+    check(control.calls.some(c => c.path === '/api/history/delete' && c.body.all === true), 'Clear all history not called');
+  });
+  await run('新增功能：播放器点击进度条定位与非自动跳过片头按钮交互', async () => {
+    control.skips = { enabled: false, ranges: [{ start: 10, end: 80, type: 'op' }] };
+    await play(); await page.waitForTimeout(80);
+    await page.locator('#video').evaluate(v => { v.currentTime = 25; v.dispatchEvent(new Event('timeupdate')); });
+    await page.waitForSelector('#skip-prompt:not(.hidden)');
+    await page.locator('#skip-prompt').click();
+    check(await page.locator('#video').evaluate(v => v.currentTime) === 80, 'Interactive skip button did not jump to range end');
+    const box = await page.locator('#player-seek').boundingBox();
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    check(await page.locator('#video').evaluate(v => Math.abs(v.currentTime - 1800) < 60), 'Clicking seek bar did not seek near midpoint');
   });
   const report = { passed: cases.filter(c => c.ok).length, failed: cases.filter(c => !c.ok).length, cases };
   check(cases.length, 'No UI checks matched the filter');

@@ -4,6 +4,7 @@ import asyncio
 import json
 import pathlib
 import ssl
+import urllib.parse
 import urllib.request
 from aiowebostv import WebOsClient
 
@@ -29,6 +30,9 @@ async def main():
         if args.capture:
             await asyncio.sleep(.8)
             shot = await client.request('tv/executeOneShot')
+            parsed = urllib.parse.urlparse(shot.get('imageUri', ''))
+            if parsed.scheme not in ('http', 'https') or parsed.hostname != saved['host'] or parsed.username or parsed.password:
+                raise RuntimeError('Unexpected screenshot host in TV response')
             with urllib.request.urlopen(shot['imageUri'], context=ssl._create_unverified_context(), timeout=10) as response:
                 pathlib.Path('.local/tv-shot.jpg').write_bytes(response.read())
             print('TV screenshot saved privately.')

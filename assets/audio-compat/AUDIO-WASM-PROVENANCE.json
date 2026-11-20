@@ -1,0 +1,13 @@
+{
+  "format": "cloudframe.audio-compat-wasm.v1",
+  "license": "LGPL-2.1",
+  "ffmpegVersion": "7.1.1",
+  "ffmpegTarballSha256": "733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1",
+  "emsdkVersion": "3.1.74",
+  "sourceSha256": "7b749be8ed9b19fce2462d9ce08ea6833b3c19ac701bfaa0211f31372b0dae56",
+  "buildScriptSha256": "fcdf055ae9d2ae5966df902d523092504ab13c186f01c14503d7556dd7e141fb",
+  "wasmSha256": "ed5a25adb930a5bea923ceefe219838c0a14e3811ef5a49d4d52fcddc4f99d7b",
+  "wasmBytes": 1615947,
+  "gplEnabled": false,
+  "nonfreeEnabled": false
+}

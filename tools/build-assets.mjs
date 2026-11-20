@@ -13,3 +13,5 @@ const [loaderSource, wasm] = await Promise.all([readFile(resolve(vendor, 'libhei
 await writeFile(resolve(base, 'app/heif-assets.js'), 'window.CloudFrameHeifAssets=' + JSON.stringify({ workerSource: heifWorker.outputFiles[0].text, loaderSource, wasmBase64: wasm.toString('base64') }) + ';');
 await mkdir(resolve(base, 'app/licenses/heif'), { recursive: true });
 await Promise.all(['HEIF-NOTICES.md', 'libde265-COPYING.txt', 'libheif-COPYING.txt', 'libheif-js-LGPL-3.0.txt'].map(file => copyFile(resolve(base, 'third-party', file), resolve(base, 'app/licenses/heif', file))));
+await mkdir(resolve(base, 'app/licenses/audio-compat'), { recursive: true });
+await Promise.all(['AUDIO-COMPAT-NOTICES.md', 'FFMPEG-LGPL-2.1.txt'].map(file => copyFile(resolve(base, 'third-party', file), resolve(base, 'app/licenses/audio-compat', file))));

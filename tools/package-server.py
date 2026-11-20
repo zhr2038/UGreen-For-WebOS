@@ -8,7 +8,7 @@ version = json.loads((root / 'package.json').read_text(encoding='utf-8'))['versi
 output = root / 'dist' / f'lg-nas-cinema-server-v{version}.zip'
 output.parent.mkdir(exist_ok=True)
 entries = ['server.mjs', 'package.json', 'package-lock.json', 'Dockerfile', '.dockerignore',
-           'compose.yaml', 'README.md', 'docs', 'lib', 'app', 'app-src', 'third-party',
+           'compose.yaml', 'README.md', 'docs', 'lib', 'app', 'app-src', 'third-party', 'assets/audio-compat',
            'tools/build-assets.mjs', 'tools/configure-nas.mjs', 'tools/pair-code.mjs', 'tools/nas-movie-audio.py']
 with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
     for entry in entries:
