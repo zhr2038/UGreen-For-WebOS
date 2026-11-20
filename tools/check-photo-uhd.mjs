@@ -19,7 +19,8 @@ const server = http.createServer(async (req, res) => {
   try {
     if (path === '/blank.html') { res.end('<!doctype html><title>UHD validation</title>'); return; }
     if (path === '/source.png' || path === '/source.jpg') { res.setHeader('content-type', path.endsWith('png') ? 'image/png' : 'image/jpeg'); res.end(await readFile(join(output, path.slice(1)))); return; }
-    if (/^\/photo-uhd-(probe|pipeline)\.js$/.test(path)) { res.setHeader('content-type', 'text/javascript'); res.end(await readFile(join(project, 'app', path.slice(1)))); return; }
+    if (path === '/photo-uhd-probe.js') { res.setHeader('content-type', 'text/javascript'); res.end(await readFile(join(project, 'test/photo-uhd-probe.js'))); return; }
+    if (path === '/photo-uhd-pipeline.js') { res.setHeader('content-type', 'text/javascript'); res.end(await readFile(join(project, 'app/photo-uhd-pipeline.js'))); return; }
     if (req.method === 'POST' && /^\/artifact\/((png|jpg)\.mp4|(capabilities|attempts)\.json)$/.test(path)) { const chunks = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > 50 * 1024 * 1024) throw new Error('artifact too large'); chunks.push(chunk); } await writeFile(join(output, path.split('/').pop()), Buffer.concat(chunks)); res.end('ok'); return; }
     res.writeHead(404); res.end();
   } catch { res.writeHead(500); res.end(); }

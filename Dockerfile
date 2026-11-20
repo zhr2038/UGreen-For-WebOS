@@ -14,6 +14,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY server.mjs ./
 COPY lib ./lib
+COPY assets/audio-compat ./assets/audio-compat
 COPY app ./app
 COPY --from=assets /build/app/qr.js ./app/qr.js
 COPY --from=assets /build/app/playback.js ./app/playback.js
@@ -21,4 +22,5 @@ COPY --from=assets /build/app/heif-assets.js ./app/heif-assets.js
 COPY --from=assets /build/app/licenses ./app/licenses
 COPY tools/configure-nas.mjs tools/pair-code.mjs ./tools/
 ENV NODE_ENV=production
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8780)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "server.mjs"]

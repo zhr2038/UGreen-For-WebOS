@@ -35,8 +35,27 @@ test('snapshot lease destruction never closes the shared native owner and stale 
  f.config.token='new-token';f.nas.reset();let received;b.relay.request=async()=>{received=b.relay.config.token;return'old-relay';};assert.equal(await b.request('old-file'),'old-relay');assert.equal(received,'old-token');b.close();const c=b.snapshot();assert.equal(c.config.token,'old-token');c.close();assert.deepEqual(f.leases,{retains:2,releases:2});
 });
 test('stale visibility scope cannot hide a newer account and foreground lease expires',async t=>{
- t.mock.timers.enable({apis:['setTimeout']});const f=fixture(),old=f.nas.visibilityScope();f.nas.reset();const current=f.nas.visibilityScope();assert.notEqual(old,current);assert.equal(f.nas.setVisibility({scope:old,visible:false}),false);
- f.nas.setVisibility({scope:current,visible:true});await f.nas.select();assert.equal(f.nas.summary().p2p,true);t.mock.timers.tick(90000);assert.equal(f.nas.summary().p2p,false);assert.equal(f.nas.visible,false);f.nas.close();
+ const f = fixture(), old = f.nas.visibilityScope();
+ f.nas.reset();
+ const current = f.nas.visibilityScope();
+ assert.notEqual(old, current);
+ assert.equal(f.nas.setVisibility({scope: old, visible: false}), false);
+ // Intercept just the lease deadline. Native timers still handle cancellations and other network deadlines.
+ let expire;
+ const realSetTimeout = globalThis.setTimeout;
+ t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+   const timer = realSetTimeout(callback, delay, ...args);
+   if (delay === 90000) expire = () => { clearTimeout(timer); callback(...args); };
+   return timer;
+ });
+ t.after(() => f.nas.close());
+ f.nas.setVisibility({scope: current, visible: true});
+ await f.nas.select();
+ assert.equal(f.nas.summary().p2p, true);
+ assert.equal(typeof expire, 'function');
+ expire();
+ assert.equal(f.nas.summary().p2p, false);
+ assert.equal(f.nas.visible, false);
 });
 test('fifth concurrent stream falls back alone while four healthy owned native streams remain current',async()=>{
  const f=fixture(),sockets=new Map(),held=[];let relayRequests=0;

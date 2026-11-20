@@ -17,11 +17,18 @@
       if (header[0] === 137 && header[1] === 80 && header.length >= 24) { knownWidth = u32(16); knownHeight = u32(20); }
       else if (header[0] === 255 && header[1] === 216) {
         let p = 2;
-        while (p + 7 < header.length) {
+        while (p + 3 < header.length) {
           if (header[p] !== 255) break;
-          while (header[p] === 255) p++;
-          const marker = header[p++]; if (marker === 218 || marker === 217) break;
-          if ([192,193,194,195,197,198,199,201,202,203,205,206,207].includes(marker)) { knownHeight = u16(p + 3); knownWidth = u16(p + 5); break; }
+          while (p < header.length && header[p] === 255) p++;
+          if (p >= header.length) break;
+          const marker = header[p++];
+          if (marker === 218 || marker === 217) break;
+          if (marker === 0 || marker === 1 || (marker >= 208 && marker <= 215)) continue;
+          if (p + 2 > header.length) break;
+          if ([192,193,194,195,197,198,199,201,202,203,205,206,207].includes(marker)) {
+            if (p + 7 > header.length) break;
+            knownHeight = u16(p + 3); knownWidth = u16(p + 5); break;
+          }
           const length = u16(p); if (length < 2) break; p += length;
         }
       } else if (header[0] === 82 && header[1] === 73 && header[8] === 87 && header[9] === 69 && header.length >= 30) {
@@ -63,7 +70,7 @@
       if (state === 'loading' || state === 'error') {
         if (!record.status && record.img.parentElement) {
           const node = document.createElement('span'); node.className = 'artwork-status'; node.setAttribute('aria-hidden', 'true');
-          Object.assign(node.style, { position: 'absolute', left: record.img.offsetLeft + 'px', top: record.img.offsetTop + 'px', width: record.img.offsetWidth + 'px', height: record.img.offsetHeight + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#15191f', color: '#a6a6ab', fontSize: '22px', pointerEvents: 'none', zIndex: '0' });
+          Object.assign(node.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#15191f', color: '#a6a6ab', fontSize: '22px', pointerEvents: 'none', zIndex: '0' });
           record.img.parentElement.appendChild(node); record.status = node;
         }
         if (record.status) record.status.textContent = state === 'loading' ? '加载中…' : '封面暂不可用';
@@ -120,7 +127,9 @@
             const message = event.data;
             if ('ready' in message) { clearTimeout(readyTimer); workerStartup = null; if (message.ready) resolve(); else { workerDisabled = true; terminateWorker(); reject(new Error('Worker conversion unavailable')); } return; }
             const pending = pendingWorker; if (!pending || message.id !== pending.id) return;
-            clearTimeout(pending.timer); pendingWorker = null; if (message.error) pending.reject(new Error('Worker conversion failed')); else pending.resolve(message.result);
+            clearTimeout(pending.timer); pendingWorker = null;
+            if (message.error) pending.reject(Object.assign(new Error('Worker conversion failed'), { decodeUnsupported: true }));
+            else pending.resolve(message.result);
           };
           processor.onerror = () => { if (processor !== instance) return; clearTimeout(readyTimer); workerDisabled = true; terminateWorker(new Error('Worker unavailable')); reject(new Error('Worker unavailable')); };
         } catch (error) { clearTimeout(readyTimer); workerDisabled = true; terminateWorker(error); reject(error); }
@@ -128,14 +137,25 @@
       return workerReady;
     }
     async function convert(blob, kind, signal) {
-      const cancel = () => terminateWorker(); signal.addEventListener('abort', cancel, { once: true });
+      const cancel = () => {
+        if (pendingWorker) {
+          clearTimeout(pendingWorker.timer);
+          pendingWorker.reject(abortError());
+          pendingWorker = null;
+        }
+      };
+      signal.addEventListener('abort', cancel, { once: true });
       try {
         if (!workerDisabled) {
           try {
             await startWorker(); if (signal.aborted) throw abortError();
             const result = await new Promise((resolve, reject) => { const id = ++serial; pendingWorker = { id, resolve, reject, timer: setTimeout(() => { workerDisabled = true; terminateWorker(new Error('Worker conversion timed out')); }, 12000) }; processor.postMessage({ id, blob, limit: bounds[kind] }); });
             return { ...result, processor: 'worker' };
-          } catch (error) { if (signal.aborted) throw abortError(); workerDisabled = true; terminateWorker(error); }
+          } catch (error) {
+            if (signal.aborted) throw abortError();
+            if (error?.decodeUnsupported) throw error;
+            workerDisabled = true; terminateWorker(error);
+          }
         }
         if (signal.aborted) throw abortError();
         const result = await resizeArtwork(blob, bounds[kind]); if (signal.aborted) throw abortError(); return { ...result, processor: 'main' };

@@ -48,7 +48,9 @@ test('bridge isolates NAS credentials, forwards ranges and scopes playback to th
   t.after(async () => { child.kill(); await once(child, 'exit').catch(() => {}); await new Promise(r => upstream.close(r)); await rm(state, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${port}`;
   for (let n = 0; n < 80; n++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} await new Promise(r => setTimeout(r, 25)); }
-  assert.equal(log, '');
+  // Sharp loads a JSON module. Node 20.12 prints this process warning before the first request.
+  const jsonModuleWarning = /^\(node:\d+\) ExperimentalWarning: Importing JSON modules is an experimental feature and might change at any time\r?\n(?:\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n)?/m;
+  assert.equal(log.replace(jsonModuleWarning, ''), '');
   assert.equal((await fetch(base + '/api/home')).status, 401);
   const code = (await readFile(join(state, 'pair-code'), 'utf8')).trim();
   const pair = async (value = code) => { const r = await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: value }) }); assert.equal(r.status, 200); return (await r.json()).token; };

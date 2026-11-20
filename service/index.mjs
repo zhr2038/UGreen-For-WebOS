@@ -1,5 +1,6 @@
 import Service from 'webos-service';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createBridge } from '../lib/bridge.mjs';
 import { DirectConnection } from '../lib/direct.mjs';
@@ -11,41 +12,67 @@ import {createServiceNativeFactory} from '../lib/native-service.mjs';
 import { createPrivateState } from '../lib/private-state.mjs';
 import { audioHelperConfig } from '../lib/movie-audio-helper.mjs';
 
+const serviceDir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
 const service = new Service('top.hrhome.nascinema.service');
-const storage = createTvState({ legacyDir: join(__dirname, '.state') });
+const storage = createTvState({ legacyDir: join(serviceDir, '.state') });
 const dir = storage.dir;
 const audioFile = 'movie-audio-helper.json';
 const audioStorage = createPrivateState({ dir, trustedDir: dir, files: [audioFile], maxBytes: 8192 });
 const config = {};
-let starting,transportOwner,audioHelper;
+const subscribers = new Set();
+let starting, transportOwner, bridgeOwner, controlOwner, audioHelper, idleResetTimer = null, shuttingDown = false;
 async function start() {
   if (!starting) starting = (async () => {
     // Validate the real service UID's writable private data volume before
     // copying anything from an older package. Migration verifies every copy
     // and fsyncs it before removing the corresponding legacy state file.
     await storage.checkWritable();
-    await storage.migrate();
+    try { await storage.migrate(); }
+    catch (error) {
+      // Malformed/unreadable legacy .state from a previous package should not
+      // lock out fresh logins on an otherwise clean private state volume.
+      if (!['TV_STATE_INVALID_LEGACY', 'ENOENT', 'EACCES'].includes(error?.code) && !String(error?.code || '').startsWith('PRIVATE_STATE_')) throw error;
+    }
     try {
       const record = await audioStorage.readVersioned(audioFile);
       if (record) audioHelper = audioHelperConfig(JSON.parse(record.value));
     } catch { /* Optional local audio helper. */ }
-    const control = new DirectConnection({ dir, config }); await control.load();
-    const nativeFactory=createServiceNativeFactory({service,stateDir:dir,assetDir:join(__dirname,'native-assets')});
+    const control = new DirectConnection({ dir, config }); controlOwner = control; await control.load();
+    const nativeFactory=createServiceNativeFactory({service,stateDir:dir,assetDir:join(serviceDir,'native-assets')});
     const transport = new AdaptiveNas(config,{nativeFactory});transportOwner=transport;
     const token = randomBytes(32).toString('hex');
     const bridge = await createBridge({ dir, config, control, thumbnails: new NativeThumbnails(), host: '127.0.0.1', port: 0, clientToken: token, nasClient: transport, getAudioHelper: () => audioHelper });
+    bridgeOwner = bridge;
     transport.select().catch(() => {});
     control.onChange = () => { bridge.reset(); transport.reset(); transport.select().catch(() => {}); };
-    return { server: 'http://127.0.0.1:' + bridge.server.address().port, token, runtimeVersion: '0.5.5', ...control.status() };
+    return { server: 'http://127.0.0.1:' + bridge.server.address().port, token, runtimeVersion: '0.5.6', ...control.status() };
   })().catch(error => { starting = null; throw error; });
   return starting;
+}
+function cancelSubscriber(message) {
+  subscribers.delete(message?.uniqueToken || message);
+  if (subscribers.size > 0) return;
+  controlOwner?.cancel?.();
+  if (transportOwner?.visibilityScope) {
+    try {
+      transportOwner.setVisibility({ visible: false, scope: transportOwner.visibilityScope() });
+    } catch {}
+  }
+  clearTimeout(idleResetTimer);
+  idleResetTimer = setTimeout(() => {
+    idleResetTimer = null;
+    if (subscribers.size === 0) bridgeOwner?.reset?.().catch(() => {});
+  }, 5000);
+  idleResetTimer.unref?.();
 }
 // The app holds this subscription while open. Cancelling it lets webOS apply
 // its normal idle lifecycle instead of leaving a permanent background daemon.
 service.register('start', message => {
   if (!isCompanionCaller(message)) return message.respond({ returnValue: false, errorText: 'Only the companion app may start this service' });
+  clearTimeout(idleResetTimer); idleResetTimer = null;
+  if (message.isSubscription) subscribers.add(message.uniqueToken || message);
   start().then(result => message.respond({ returnValue: true, subscribed: Boolean(message.isSubscription), ...result })).catch(() => message.respond({ returnValue: false, errorText: '电视连接服务启动失败' }));
-});
+}, cancelSubscriber);
 service.register('configureMovieAudio', message => {
   if (!isCompanionCaller(message)) return message.respond({ returnValue: false, errorText: 'Only the companion app may configure audio' });
   Promise.resolve().then(async () => {
@@ -58,4 +85,13 @@ service.register('configureMovieAudio', message => {
 });
 
 process.on('exit',()=>transportOwner?.close());
-for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{transportOwner?.close();process.exit(0);});
+for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearTimeout(idleResetTimer);
+  controlOwner?.cancel?.();
+  Promise.race([
+    Promise.allSettled([bridgeOwner?.reset?.(), Promise.resolve(transportOwner?.close?.())]),
+    new Promise(resolve => setTimeout(resolve, 1500)),
+  ]).finally(() => process.exit(0));
+});
