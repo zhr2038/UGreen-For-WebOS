@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node tools/run-tests.mjs",
     "audit:native": "node tools/audit-native-worker.mjs",
     "audit:audio-wasm": "node tools/audit-audio-wasm.mjs",
     "build:assets": "node tools/build-assets.mjs",
